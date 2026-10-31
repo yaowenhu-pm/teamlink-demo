@@ -1,0 +1,13 @@
+{
+  "source": "media/teamlink-intro-v1.mp4",
+  "output": "media/teamlink-original-score.m4a",
+  "duration": 30,
+  "codec": "AAC LC",
+  "sampleRate": 44100,
+  "channels": 2,
+  "music": "Same original synthesized instrumental from TeamLink intro v1; no replacement melody.",
+  "editing": "Audio stream copied without re-encoding; original AAC packets match the source.",
+  "aacPacketSha256": "def6f2dff7e5baaee1f36d256cc6ffa6f4cee5e08220ee5a914870c1b6529bbd",
+  "sha256": "777ea61dd663c0227aef303a735b4b96722aca4a0f18c37af7aa269c4ad2bcc3",
+  "bytes": 488923
+}

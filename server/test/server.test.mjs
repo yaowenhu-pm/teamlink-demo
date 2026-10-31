@@ -22,6 +22,7 @@ async function fixture(options = {}) {
   await writeFile(resolve(publicRoot, 'index.html'), '<!doctype html><title>fixture landscape</title>');
   await writeFile(resolve(publicRoot, 'world.mjs'), 'export const fixture = true;');
   await writeFile(resolve(mediaRoot, 'intro.mp4'), Buffer.from('0123456789'));
+  await writeFile(resolve(mediaRoot, 'original-score.m4a'), Buffer.from('0123456789'));
   await mkdir(resolve(publicRoot, 'legacy/app'), { recursive: true });
   await writeFile(resolve(publicRoot, 'legacy/app/index.html'), 'legacy fixture');
   await writeFile(resolve(publicRoot, 'legacy/legacy.js'), 'legacy();');
@@ -276,6 +277,29 @@ test('static media provides byte ranges, strong fingerprints, HEAD/304, legacy r
     assert.throws(() => requestTarget('/%2e%2e/private.txt'), /Bad path/);
     assert.throws(() => requestTarget('/assets/../private.txt'), /Bad path/);
     assert.throws(() => requestTarget('//evil.test/file'), /Bad request target/);
+  } finally { await f.close(); }
+});
+
+test('M4A soundtrack uses audio/mp4 and preserves HTTP Range and HEAD semantics', async () => {
+  const f = await fixture();
+  try {
+    let response = await f.request('/media/original-score.m4a');
+    assert.equal(response.status, 200);
+    assert.equal(response.headers.get('content-type'), 'audio/mp4');
+    assert.equal(response.headers.get('accept-ranges'), 'bytes');
+    assert.equal(await response.text(), '0123456789');
+    response = await f.request('/media/original-score.m4a', { headers: { Range: 'bytes=2-5' } });
+    assert.equal(response.status, 206);
+    assert.equal(response.headers.get('content-type'), 'audio/mp4');
+    assert.equal(response.headers.get('content-range'), 'bytes 2-5/10');
+    assert.equal(response.headers.get('content-length'), '4');
+    assert.equal(await response.text(), '2345');
+    response = await f.request('/media/original-score.m4a', { method: 'HEAD', headers: { Range: 'bytes=2-5' } });
+    assert.equal(response.status, 206);
+    assert.equal(response.headers.get('content-type'), 'audio/mp4');
+    assert.equal(response.headers.get('content-range'), 'bytes 2-5/10');
+    assert.equal(response.headers.get('content-length'), '4');
+    assert.equal(await response.text(), '');
   } finally { await f.close(); }
 });
 

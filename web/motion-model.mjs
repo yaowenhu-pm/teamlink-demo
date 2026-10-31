@@ -24,25 +24,30 @@ export function drawingPoints(values, maxPoints = 40) {
   return result;
 }
 
-/** Small deterministic visual offsets. No scene parameters or clocks are mutated. */
-export function ambientMotion(kind, seconds, {wind = .3, index = 0} = {}) {
+/** Deterministic visual motion. No shared scene parameters or clocks are mutated. */
+export function ambientMotion(kind, seconds, {wind = .3, index = 0, depth = .6, travelRange} = {}) {
   const t = Number.isFinite(seconds) ? Math.max(0, seconds) : 0;
   const breeze = clamp(wind), offset = index*.83;
   const swing = (rate, phase = offset) => Math.sin(t*rate+phase)-Math.sin(phase);
   if (kind === 'sun') return {x: swing(.025, 0)*18, y: swing(.019, 0)*4.5};
-  if (kind === 'boat') return {x: swing(.075)*(12+breeze*15), y: swing(.62)*(.7+breeze*1.5), rotation: swing(.54)*(.7+breeze*1.7), wake: .2+.16*(.5+.5*Math.sin(t*.8+offset))};
+  if (kind === 'boat') {
+    const amplitude=78+breeze*14;
+    const low=Math.min(0,Math.max(-amplitude,travelRange?.min??-amplitude));
+    const high=Math.max(0,Math.min(amplitude,travelRange?.max??amplitude));
+    const center=(low+high)/2,radius=(high-low)/2;
+    // Start at the saved anchor, turning continuously inside the visible sea.
+    const start=radius?Math.asin(clamp(-center/radius,-1,1)):0;
+    const angle=high>=-low?start:Math.PI-start;
+    return {x:radius?center+radius*Math.sin(t*.23+angle):0, y:swing(.8)*(1+breeze*2),
+      rotation:swing(.7)*(1+breeze*2.2),wake:.38+.18*(.5+.5*Math.sin(t*1.3+offset))};
+  }
   if (kind === 'bird') return {x: swing(.16)*(24+breeze*12)+swing(.045)*9, y: swing(.28)*7, rotation: swing(.19)*5, flap: Math.sin(t*5.6+index*1.4)};
-  if (kind === 'water') return {x: swing(.19, 0)*(4+breeze*8), y: swing(.13, 0)*.9, highlight: .78+Math.sin(t*.47)*.13};
+  if (kind === 'water') {
+    const distance=clamp(depth);
+    return {x:Math.sin(t*(.22+distance*.1))*(18+distance*68),y:Math.sin(t*.37+distance)*(1+distance*2.5),
+      highlight:.76+Math.sin(t*(.8+distance*.3)+distance*2)*.2,flow:t*(5+distance*17)};
+  }
   if (kind === 'cloud') return {x: swing(.035, 0)*(8+breeze*12), y: 0};
   if (kind === 'rain') return {x: -(t*.8%1)*breeze*24, y: (t*.8%1)*55};
   return {x: 0, y: 0};
-}
-
-export function streamLeaf(index, seconds, count = 28) {
-  const time = Number.isFinite(seconds) ? Math.max(0, seconds) : 0;
-  const duration = 10+(index%5)*.9;
-  const phase = ((time/duration+index/count)%1+1)%1;
-  const fade = Math.min(1, phase*12, (1-phase)*10);
-  return {phase, opacity: fade*(.38+(index%4)*.12), scale: .29+(index%6)*.065,
-    rotation: Math.sin(time*1.3+index*2.1)*12};
 }

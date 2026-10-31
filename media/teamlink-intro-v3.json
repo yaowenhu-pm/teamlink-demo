@@ -1,0 +1,62 @@
+{
+  "duration": 15,
+  "fps": 24,
+  "frames": 360,
+  "resolution": [
+    1280,
+    720
+  ],
+  "recording": "artifacts/video/motion-v3/recording.json",
+  "sourceDuration": 14.037,
+  "sourceFrames": 347,
+  "sourceMarks": {
+    "draw-start": 0.451,
+    "draw-done": 3.871,
+    "boat-start": 7.472,
+    "paste-done": 11.127
+  },
+  "sourceFrameOrdering": {
+    "method": "Stable sort by actual CDP capture timestamp",
+    "outOfOrderArrivalPairs": 6
+  },
+  "firstSourceFrameTime": 0.3579239845275879,
+  "sourceFinalState": {
+    "revision": "3",
+    "boats": "2",
+    "leafTrailPoints": 40
+  },
+  "footage": "New motion-v3 real browser recording of a single hand-drawn leaf and boat copy/paste; no v2 footage reused.",
+  "editing": "Observed actions kept in order; synchronization waits condensed. Captions mark sped-up clips.",
+  "audio": {
+    "source": "media/teamlink-original-score.m4a",
+    "originalSource": "media/teamlink-intro-v1.mp4",
+    "method": "Original AAC stream copied for the first 15 seconds without re-encoding or replacing the melody.",
+    "originalPacketPrefixVerified": true,
+    "aacPacketSha256": "b75a68ec6f8e1d3ad93e4ffc5000ed4e6aae65bee9fb7f0b7041e17002acd350"
+  },
+  "poster": {
+    "output": "web/assets/teamlink-intro-poster-v3.webp",
+    "bytes": 23132
+  },
+  "output": "media/teamlink-intro-v3.mp4",
+  "bytes": 445951,
+  "sha256": "b66b0378cd7c671117f1ad6bb96b84acb1cc2bf3be35cbabba1b44d14be4b62c",
+  "validation": {
+    "decodedVideoFrames": 360,
+    "durationSeconds": 15,
+    "audioCodec": "AAC LC",
+    "originalV1AudioPacketPrefixVerified": true,
+    "audioPacketSha256": "b75a68ec6f8e1d3ad93e4ffc5000ed4e6aae65bee9fb7f0b7041e17002acd350",
+    "firstSourceFrameTime": 0.3579239845275879,
+    "contactSheet": "artifacts/video/motion-v3-edit/contact-sheet.png",
+    "contactSheetTimes": [
+      0,
+      3,
+      6.5,
+      9.5,
+      12.5,
+      14.958333
+    ],
+    "visualQA": "Passed first/middle/end six-frame contact-sheet inspection; initial frame is fullscreen scenery with no webpage-to-fullscreen flash."
+  }
+}

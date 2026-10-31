@@ -1,5 +1,5 @@
 import { createScene, validateScene, solarPosition, leafPath } from './scene-model.mjs';
-import { drawingPoints, ambientMotion, streamLeaf } from './motion-model.mjs';
+import { drawingPoints, ambientMotion } from './motion-model.mjs';
 
 const NS = 'http://www.w3.org/2000/svg';
 const WIDTH = 1600, HEIGHT = 1000, SKY_HEIGHT = 480;
@@ -278,13 +278,6 @@ export function mountLandscape(svgElement, { onSunDrag, onTreeSelect, onLeafSele
   const layers = Object.fromEntries(['stars','clouds','sun-visual','reflection','water','distant','mountain-left','mountain-right','mountain-extras','support','foreground','land-details','pines','boat','birds','hero','flowers','rain','trajectory','leaf'].map((name) => [name, layer(name)]));
   // Keep trajectory handles above the falling leaf's transparent hit ellipse.
   svgElement.append(layers.trajectory);
-  const streamNodes=[];
-  for(const depth of ['back','front']){
-    const stream=document.createElementNS(NS,'g');stream.setAttribute('data-layer','leaves-'+depth);stream.setAttribute('pointer-events','none');
-    stream.innerHTML=Array.from({length:14},(_,i)=>'<g data-stream-leaf="'+(i+(depth==='back'?0:14))+'"><path d="M-14 2Q-8-13 15-9Q18 9-4 12Q-12 10-14 2Z" fill="'+(i%3?'#d8be71':'#d7d59b')+'"/><path d="M-15 10Q-3 1 11-6" fill="none" stroke="#938447" stroke-width="1.1"/></g>').join('');
-    svgElement.insertBefore(stream,depth==='back'?layers.hero:layers.leaf);
-    layers['leaves-'+depth]=stream;streamNodes.push(...stream.children);
-  }
   const drawingLayer=document.createElementNS(NS,'g');drawingLayer.setAttribute('data-layer','drawing');drawingLayer.setAttribute('pointer-events','none');
   drawingLayer.innerHTML='<path data-drawing-path fill="none" stroke="#fff0b3" stroke-width="3" stroke-linejoin="round" stroke-linecap="round" vector-effect="non-scaling-stroke"/>';
   drawingLayer.style.display='none';svgElement.append(drawingLayer);
@@ -300,7 +293,7 @@ export function mountLandscape(svgElement, { onSunDrag, onTreeSelect, onLeafSele
   const sunControl = svgElement.querySelector('[data-role="sun-control"]');
   const stops = Object.fromEntries(['sky-top','sky-bottom','sea-top','sea-bottom'].map((name) => [name, svgElement.querySelector(`[data-stop="${name}"]`)]));
   let destroyed = false, current = null, drag = null, geometryKey = '', paletteKey = '', weatherKey = '', pathKey = '', compareKey = '', points = [], sunSpan = 1240;
-  let objectLayout = null, boatNodes = [], birdNodes = [], heroAnchorLocal = {x:512,y:1010};
+  let objectLayout = null, boatNodes = [], birdNodes = [],waterNodes=[], heroAnchorLocal = {x:512,y:1010};
   let camera={left:0,right:WIDTH,top:0,bottom:HEIGHT}, trajectoryFrame={x:150,y:525,scaleX:FOREGROUND_SCALE,scaleY:FOREGROUND_SCALE};
   let interactiveDrag=null, selectedId=null, currentPhase=0, skipClickUntil=0;
   let drawingMode=false,pathStroke=null,motionNow=0,lastMotionTime=null,motionDelta=0,selectionKey='';
@@ -337,13 +330,16 @@ export function mountLandscape(svgElement, { onSunDrag, onTreeSelect, onLeafSele
     const stars = [];
     for (let i = 0; i < 84; i++) stars.push(`<circle cx="${fixed(random()*WIDTH)}" cy="${fixed(20+random()*390)}" r="${fixed(.6+random()*1.35)}" fill="#e4eddb" opacity="${fixed(.3+random()*.65)}"/>`);
     layers.stars.innerHTML = stars.join('');
-    const wave = [];
+    const wave = [[],[],[]],sparkle=[[],[],[]];
     for (let i = 0; i < 240; i++) {
-      const x = random()*WIDTH, depth = Math.pow(random(),1.65), y = 484+depth*510;
+      const x = -130+random()*(WIDTH+260), depth = Math.pow(random(),1.65), y = 484+depth*510;
       const width = 5+depth*15+random()*(16+depth*64);
-      wave.push(`<path d="M${fixed(x)} ${fixed(y)}q${fixed(width*.45)} ${fixed(-.3-depth*.7)} ${fixed(width)} 0" stroke="${i%7 ? '#d2dfd2' : '#f5e6c8'}" stroke-opacity="${fixed(.06+random()*.13)}" stroke-width="${fixed(.45+depth*.5+random()*.35)}" stroke-linecap="round" fill="none"/>`);
+      const level=depth<.27?0:depth<.62?1:2,d=`M${fixed(x)} ${fixed(y)}q${fixed(width*.45)} ${fixed(-.7-depth*1.7)} ${fixed(width)} 0`;
+      wave[level].push(`<path d="${d}" stroke="${i%7 ? '#d2dfd2' : '#f5e6c8'}" stroke-opacity="${fixed(.12+random()*.18)}" stroke-width="${fixed(.65+depth*.8+random()*.35)}" stroke-linecap="round" fill="none"/>`);
+      if(i%3===0)sparkle[level].push(`<path d="${d}" stroke="#f5edcf" stroke-width="${fixed(.8+depth*.9)}" stroke-opacity=".4" stroke-linecap="round" fill="none"/>`);
     }
-    layers.water.innerHTML = wave.join('');
+    layers.water.innerHTML = wave.map((paths,level)=>'<g data-water-depth="'+level+'">'+paths.join('')+'<g data-water-sparkles stroke-dasharray="18 86">'+sparkle[level].join('')+'</g></g>').join('');
+    waterNodes=Array.from(layers.water.querySelectorAll('[data-water-depth]')).map(node=>({node,sparkles:node.querySelector('[data-water-sparkles]')}));
     const reflection = [];
     for(let i=0;i<66;i++) {
       const depth = i/65, y = 487+Math.pow(depth,1.5)*403;
@@ -499,10 +495,15 @@ export function mountLandscape(svgElement, { onSunDrag, onTreeSelect, onLeafSele
     layers.reflection.querySelector('ellipse').setAttribute('cx',String(sx));
     layers.reflection.querySelector('ellipse').setAttribute('cy','625');
     const waterMotion=ambientMotion('water',motionNow,current),cloudMotion=ambientMotion('cloud',motionNow,current),rainMotion=ambientMotion('rain',motionNow,current);
-    layers.reflection.querySelector('[data-part="reflection-ripples"]').setAttribute('transform',`translate(${fixed(sx+waterMotion.x*.3)} 0)`);
+    const reflectionRipples=layers.reflection.querySelector('[data-part="reflection-ripples"]');
+    reflectionRipples.setAttribute('transform',`translate(${fixed(sx+waterMotion.x*.4)} ${fixed(waterMotion.y)})`);
+    reflectionRipples.setAttribute('stroke-dasharray','18 34');reflectionRipples.setAttribute('stroke-dashoffset',String(-waterMotion.flow*.8));
     layers.reflection.setAttribute('opacity',String((moon ? .14 : .8)*waterMotion.highlight));
-    layers.water.setAttribute('transform',`translate(${fixed(waterMotion.x)} ${fixed(waterMotion.y)})`);
-    layers.water.setAttribute('opacity',String(.88+waterMotion.highlight*.12));
+    for(const [index,{node,sparkles}] of waterNodes.entries()){
+      const movement=ambientMotion('water',motionNow,{wind:current.wind,depth:[.15,.55,1][index]});
+      node.setAttribute('transform',`translate(${fixed(movement.x)} ${fixed(movement.y)})`);
+      sparkles.setAttribute('stroke-dashoffset',String(-movement.flow));sparkles.setAttribute('opacity',String(movement.highlight));
+    }
     layers.clouds.setAttribute('transform',`translate(${fixed(cloudMotion.x)} 0)`);
     layers.rain.setAttribute('transform',`translate(${fixed(rainMotion.x)} ${fixed(rainMotion.y)})`);
     const foregroundShift=`translate(${fixed(foregroundX-150)} 0)`;
@@ -519,9 +520,11 @@ export function mountLandscape(svgElement, { onSunDrag, onTreeSelect, onLeafSele
       if(record.transform!==transform){record.node.setAttribute('transform',transform);record.transform=transform;}
       if(record.pressed!==pressed){record.node.setAttribute('aria-pressed',String(pressed));record.pressed=pressed;}
       if(record.art){
-        const held=record.id===selectedId||interactiveDrag?.id===record.id;
+        const held=interactiveDrag?.id===record.id;
         const time=(objectClocks.get(record.id)??motionNow)+(held?0:motionDelta);objectClocks.set(record.id,time);
-        const index=Number(record.id.split(':')[1]),motion=ambientMotion(record.kind,time,{wind:current.wind,index});
+        const index=Number(record.id.split(':')[1]);
+        if(record.kind==='boat'&&!record.travelRange){const margin=45*objectLayout.boats[index].scale+8;record.travelRange={min:Math.min(0,camera.left+margin-anchor.x),max:Math.max(0,camera.right-margin-anchor.x)};}
+        const motion=ambientMotion(record.kind,time,{wind:current.wind,index,travelRange:record.travelRange});record.motion=motion;
         record.artTransform='translate('+fixed(motion.x)+' '+fixed(motion.y)+') rotate('+fixed(motion.rotation)+')'+(record.kind==='boat'?' scale('+objectLayout.boats[index].scale+')':'');
         record.art.setAttribute('transform',record.artTransform);
         if(record.wake)record.wake.setAttribute('opacity',String(motion.wake));
@@ -535,15 +538,9 @@ export function mountLandscape(svgElement, { onSunDrag, onTreeSelect, onLeafSele
     layers.trajectory.setAttribute('transform','translate('+fixed(trajectoryFrame.x)+' '+fixed(trajectoryFrame.y)+') scale('+trajectoryFrame.scaleX+' '+trajectoryFrame.scaleY+')');
     const nextPath=[current.seed,current.wind,current.rain,JSON.stringify(current.leafOrigin),JSON.stringify(current.leafTarget),JSON.stringify(current.leafTrail)].join(':');
     if(nextPath!==pathKey){points=leafPath(current,{samples:81});layers.trajectory.querySelector('[data-path="current"]').setAttribute('d',pointsPath(points));pathKey=nextPath;}
-    const p=phasePoint(points,phase),mainLeaf=showTrajectory?p:phasePoint(points,(motionNow/11)%1);
+    const p=phasePoint(points,phase),mainLeaf=p;
     layers.leaf.setAttribute('transform',`translate(${fixed(trajectoryFrame.x+mainLeaf.x*WIDTH*trajectoryFrame.scaleX)} ${fixed(trajectoryFrame.y+mainLeaf.y*HEIGHT*trajectoryFrame.scaleY)}) rotate(${fixed(mainLeaf.rotation)}) scale(.65)`);
     layers.leaf.style.display=current.trees&&!drawingMode?'':'none';
-    for(const node of streamNodes){
-      const index=Number(node.dataset.streamLeaf),leaf=streamLeaf(index,motionNow,streamNodes.length),point=phasePoint(points,leaf.phase);
-      node.setAttribute('transform','translate('+fixed(trajectoryFrame.x+point.x*WIDTH*trajectoryFrame.scaleX)+' '+fixed(trajectoryFrame.y+point.y*HEIGHT*trajectoryFrame.scaleY)+') rotate('+fixed(point.rotation+leaf.rotation)+') scale('+leaf.scale+')');
-      node.setAttribute('opacity',String(leaf.opacity));
-    }
-    for(const depth of ['back','front'])layers['leaves-'+depth].style.display=current.trees&&!drawingMode?'':'none';
     layers.trajectory.style.display=showTrajectory&&current.trees&&!drawingMode?'':'none';
     const pixelsPerWorld=bounds?.width>0&&bounds?.height>0?Math.max(bounds.width/WIDTH,bounds.height/HEIGHT):1;
     for(const [handle,point] of Object.entries({origin:points[0],target:points.at(-1),phase:p})){
@@ -570,12 +567,23 @@ export function mountLandscape(svgElement, { onSunDrag, onTreeSelect, onLeafSele
     const key=[record.id,geometryKey,record.node.getAttribute('transform'),record.artTransform??''].join('|');
     if(key===selectionKey)return;
     try {
-      const box=record.node.getBBox(), rootMatrix=svgElement.getScreenCTM(), nodeMatrix=record.node.getScreenCTM();
-      if(!rootMatrix||!nodeMatrix)throw Error();
-      const matrix=rootMatrix.inverse().multiply(nodeMatrix);
-      const corners=[[box.x,box.y],[box.x+box.width,box.y],[box.x,box.y+box.height],[box.x+box.width,box.y+box.height]].map(([x,y])=>{
-        const point=svgElement.createSVGPoint();point.x=x;point.y=y;return point.matrixTransform(matrix);
-      });
+      let corners;
+      if(record.art){
+        // Artwork is rigid inside its anchor. Cache its local box once, then
+        // follow movement with arithmetic instead of forcing layout every frame.
+        const box=record.artBox??(record.artBox=record.art.getBBox()),motion=record.motion;
+        const scale=record.kind==='boat'?objectLayout.boats[Number(record.id.split(':')[1])].scale:1;
+        const angle=motion.rotation*Math.PI/180,cos=Math.cos(angle),sin=Math.sin(angle);
+        corners=[[box.x,box.y],[box.x+box.width,box.y],[box.x,box.y+box.height],[box.x+box.width,box.y+box.height]].map(([x,y])=>({
+          x:record.anchor.x+motion.x+(x*cos-y*sin)*scale,y:record.anchor.y+motion.y+(x*sin+y*cos)*scale}));
+      }else{
+        const box=record.node.getBBox(),rootMatrix=svgElement.getScreenCTM(),nodeMatrix=record.node.getScreenCTM();
+        if(!rootMatrix||!nodeMatrix)throw Error();
+        const matrix=rootMatrix.inverse().multiply(nodeMatrix);
+        corners=[[box.x,box.y],[box.x+box.width,box.y],[box.x,box.y+box.height],[box.x+box.width,box.y+box.height]].map(([x,y])=>{
+          const point=svgElement.createSVGPoint();point.x=x;point.y=y;return point.matrixTransform(matrix);
+        });
+      }
       const left=Math.min(...corners.map(point=>point.x)),top=Math.min(...corners.map(point=>point.y));
       const right=Math.max(...corners.map(point=>point.x)),bottom=Math.max(...corners.map(point=>point.y));
       for(const [name,value] of Object.entries({x:left-8,y:top-8,width:right-left+16,height:bottom-top+16}))selectionBox.setAttribute(name,String(fixed(value)));

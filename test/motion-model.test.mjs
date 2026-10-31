@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {drawingPoints, ambientMotion, streamLeaf} from '../web/motion-model.mjs';
+import {drawingPoints, ambientMotion} from '../web/motion-model.mjs';
 
 test('a captured stroke stays bounded, round4 and preserves both endpoints and turns', () => {
   const raw = Array.from({length: 800}, (_, i) => ({x: i/799, y: .5+Math.sin(i/799*Math.PI*2)*.4}));
@@ -26,13 +26,39 @@ test('ambient movement is deterministic, bounded and independent of leaf phase',
   assert.deepEqual(ambientMotion('mountain', 100), {x: 0, y: 0});
 });
 
-test('leaf streams have staggered times and stable positions when time is held', () => {
-  const leaves = Array.from({length: 28}, (_, i) => streamLeaf(i, 4));
-  assert.ok(new Set(leaves.map(p => p.phase)).size > 25);
-  for (const [i, leaf] of leaves.entries()) {
-    assert.deepEqual(streamLeaf(i, 4), leaf);
-    assert.ok(leaf.phase >= 0 && leaf.phase < 1 && leaf.opacity >= 0 && leaf.opacity <= 1);
-    assert.ok(leaf.scale >= .29 && leaf.scale <= .62);
-    assert.notDeepEqual(streamLeaf(i, 5), leaf);
+test('boats visibly sail within 3–5 seconds, even without wind, and turn without wrapping', () => {
+  for(const wind of [0,.3,1]){
+    assert.ok(Math.abs(ambientMotion('boat',3,{wind}).x)>=35,'three seconds must show substantial travel');
+    assert.ok(Math.abs(ambientMotion('boat',5,{wind}).x)>=50,'five seconds must show sailing rather than rocking');
+    let previous=ambientMotion('boat',0,{wind});
+    for(let t=1/30;t<80;t+=1/30){
+      const current=ambientMotion('boat',t,{wind});
+      assert.ok(Math.abs(current.x)<=92);
+      assert.ok(Math.abs(current.x-previous.x)<.8,'no frame can teleport at a wrap or turn');
+      previous=current;
+    }
+  }
+});
+
+test('a boat near the camera edge sails into available water and never jumps outside its range', () => {
+  const options={wind:.3,travelRange:{min:-100,max:20}};
+  assert.ok(Math.abs(ambientMotion('boat',0,options).x)<1e-10,'saved anchor is the initial position');
+  assert.ok(ambientMotion('boat',4,options).x < -25,'travel should favor the open side');
+  for(let t=0;t<100;t+=.1){
+    const motion=ambientMotion('boat',t,options);
+    assert.ok(motion.x>=-82.20001&&motion.x<=20.00001);
+    assert.deepEqual(ambientMotion('boat',t,options),motion,'holding time keeps every boat detail still');
+  }
+});
+
+test('near and far water have visibly different current speeds and continuous traveling highlights', () => {
+  const far=ambientMotion('water',3,{depth:.15}),middle=ambientMotion('water',3,{depth:.55}),near=ambientMotion('water',3,{depth:1});
+  assert.ok(far.x>15&&middle.x>35&&near.x>60,'water must flow clearly within three seconds');
+  assert.ok(near.x>far.x*3&&near.flow>far.flow*2,'perspective layers need different current rates');
+  assert.notEqual(far.highlight,near.highlight,'highlights have separate phases');
+  for(const depth of [.15,.55,1])for(const t of [0,3,10,30,100,1000]){
+    const current=ambientMotion('water',t,{depth}),next=ambientMotion('water',t+1/60,{depth});
+    assert.ok(Math.abs(next.x-current.x)<.5,'flow turns smoothly without texture jumps');
+    assert.ok(next.flow>current.flow&&next.flow-current.flow<.4,'highlight phase scrolls continuously');
   }
 });

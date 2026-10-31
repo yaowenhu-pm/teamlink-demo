@@ -3,6 +3,7 @@ import {createScene,validateScene,updateScene,sceneChanges,moveSceneObject} from
 import {mountLandscape} from './scene-renderer.mjs';
 import {mountCodePanel} from './code-panel.mjs';
 import {mountDirectEditor} from './direct-edit.mjs';
+import {mountLandscapeMusic} from './music.mjs';
 const $=selector=>document.querySelector(selector),$$=selector=>[...document.querySelectorAll(selector)];
 const esc=value=>String(value??'').replace(/[&<>"']/g,char=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));
 if(location.hash.startsWith('#doc='))location.replace('/legacy/app/'+location.search+location.hash);
@@ -12,6 +13,7 @@ let selected=null,editBefore=null,leafCompare=null,phase=0,playing=true,lastFram
 let codePanel=null,codeBefore=null,codeDraft=false,roomConnection=null,connecting=true,shareUnavailable=false,shareError='',inviteCache='',expiryTimer,directEditor=null;
 const reduced=matchMedia('(prefers-reduced-motion: reduce)').matches;if(reduced)playing=false;
 let drawingTrajectory=false,motionTime=0,motionPlaying=!reduced;
+let backgroundMusic=null;
 try{const raw=localStorage.getItem(STORAGE);if(raw)scene=validateScene(JSON.parse(raw));}catch{}
 const hash=new URLSearchParams(location.hash.slice(1));
 if(/^[0-9a-f]{32}$/.test(hash.get('room')??'')&&/^[0-9a-f]{64}$/.test(hash.get('key')??''))room={id:hash.get('room'),token:hash.get('key'),revision:0,connected:false,messages:[]};
@@ -224,6 +226,7 @@ function setFocusMode(enabled){
 }
 async function enterPresentation(){
  setFocusMode(true);
+ backgroundMusic?.activate();
  try{
   if(stage.requestFullscreen)await stage.requestFullscreen({navigationUI:'hide'});
   else if(stage.webkitRequestFullscreen)await stage.webkitRequestFullscreen();
@@ -256,19 +259,29 @@ new IntersectionObserver(entries=>{stageVisible=entries[0]?.isIntersecting??true
 
 const introVideo=$('#intro-video');
 introVideo.defaultMuted=true;introVideo.muted=true;
-let introVisible=false,introUserPaused=false,introSystemPause=false,introPlayRequest=null;
+backgroundMusic=mountLandscapeMusic(stage,{introVideo});
+let introVisible=false,introUserPaused=false,introSystemPause=false,introPlayRequest=null,introAbortRetries=0,introReadyRetried=false,introGestureRetried=false;
 function introEligible(){return introVisible&&!connecting&&!document.hidden&&!document.body.classList.contains('controller')&&!document.body.classList.contains('focus-mode');}
-function introCaption(){if(introVideo.error){$('#intro-video-status').textContent='视频暂未加载成功，可以使用播放控件重试。';return;}$('#intro-video-status').textContent=introVideo.paused?'已暂停 · 可使用播放控件继续':'15 秒真实操作 · 静音循环播放';}
+function introCaption(){if(introVideo.error){$('#intro-video-status').textContent='视频暂未加载成功，可以使用播放控件重试。';return;}$('#intro-video-status').textContent=introVideo.paused?'已暂停 · 可使用播放控件继续':introVideo.muted?'15 秒真实操作 · 可开启原版配乐':'15 秒真实操作 · 原版配乐';}
 function updateIntroPlayback(){
  if(!introEligible()){if(!introVideo.paused){introSystemPause=true;introVideo.pause();}return;}
  if(introUserPaused||!introVideo.paused||introPlayRequest)return;
- introVideo.autoplay=true;introPlayRequest=introVideo.play().catch(()=>{$('#intro-video-status').textContent=introVideo.error?'视频暂未加载成功，可以使用播放控件重试。':'影片已直接展示，点击播放控件即可继续。';}).finally(()=>{introPlayRequest=null;if(!introEligible()&&!introVideo.paused){introSystemPause=true;introVideo.pause();}});
+ let aborted=false;
+ introVideo.autoplay=true;introPlayRequest=introVideo.play().catch(error=>{aborted=error?.name==='AbortError';$('#intro-video-status').textContent=introVideo.error?'视频暂未加载成功，可以使用播放控件重试。':'影片已直接展示，点击播放控件即可继续。';}).finally(()=>{
+  introPlayRequest=null;
+  if(!introEligible()){if(!introVideo.paused){introSystemPause=true;introVideo.pause();}return;}
+  if(aborted&&!introUserPaused&&introVideo.paused&&introAbortRetries<1){introAbortRetries++;updateIntroPlayback();}
+ });
 }
 introVideo.addEventListener('play',()=>{introUserPaused=false;introCaption();});
 introVideo.addEventListener('playing',introCaption);
 introVideo.addEventListener('pause',()=>{if(introSystemPause)introSystemPause=false;else if(introEligible())introUserPaused=true;introCaption();});
 introVideo.addEventListener('volumechange',introCaption);
 introVideo.addEventListener('error',introCaption);
+const retryIntroWhenReady=()=>{if(introReadyRetried||introUserPaused||introPlayRequest||!introVideo.paused||!introEligible())return;introReadyRetried=true;updateIntroPlayback();};
+introVideo.addEventListener('loadeddata',retryIntroWhenReady);introVideo.addEventListener('canplay',retryIntroWhenReady);
+const retryIntroAfterGesture=event=>{if(!event.isTrusted||introGestureRetried||introUserPaused||introPlayRequest||!introVideo.paused||!introEligible()||event.target.closest?.('#intro-video'))return;introGestureRetried=true;updateIntroPlayback();};
+document.addEventListener('pointerdown',retryIntroAfterGesture,{capture:true});document.addEventListener('keydown',retryIntroAfterGesture,{capture:true});
 document.addEventListener('visibilitychange',updateIntroPlayback);
 new IntersectionObserver(entries=>{introVisible=(entries[0]?.intersectionRatio??0)>=.15;updateIntroPlayback();},{threshold:[0,.15]}).observe(introVideo);
 if(document.body.classList.contains('controller')){introVideo.autoplay=false;introVideo.removeAttribute('autoplay');updateIntroPlayback();}
