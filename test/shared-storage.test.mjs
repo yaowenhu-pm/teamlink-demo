@@ -1,11 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
-import {createDocument, updateDocument, serializeDocument, validateDocument} from '../dist/canvas-model.mjs';
-import {revisionOf} from '../dist/collaboration-model.mjs';
+import {createDocument, updateDocument, serializeDocument, validateDocument} from '../web/legacy/canvas-model.mjs';
+import {revisionOf} from '../web/legacy/collaboration-model.mjs';
 
 // Exercise the production pure selector without importing the page's DOM bootstrap.
-const source = await readFile(new URL('../dist/app.mjs', import.meta.url), 'utf8');
+const source = await readFile(new URL('../web/legacy/app.mjs', import.meta.url), 'utf8');
 const constant = source.match(/^const PROJECT_STORAGE=.*;$/m)?.[0];
 const start = source.indexOf('function sharedContextKey('), end = source.indexOf('\nfunction newSharedProjectKey(');
 assert.ok(constant && start >= 0 && end > start, 'the production shared-context selector must be available');

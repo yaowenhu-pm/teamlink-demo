@@ -1,10 +1,19 @@
 {
   "name": "teamlink-public-demo",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "private": true,
   "type": "module",
   "scripts": {
-    "test": "node --test test/canvas-model.test.mjs test/collaboration-model.test.mjs test/shared-storage.test.mjs",
-    "preview": "python3 -m http.server 4328 --directory dist"
+    "test": "node --test test/canvas-model.test.mjs test/collaboration-model.test.mjs test/shared-storage.test.mjs test/scene-model.test.mjs test/rooms.test.mjs test/interpret.test.mjs",
+    "preview": "wrangler dev --config wrangler.json --local --port 4328",
+    "build": "node scripts/build-landscape.mjs",
+    "db:generate": "drizzle-kit generate"
+  },
+  "devDependencies": {
+    "drizzle-kit": "0.31.10",
+    "drizzle-orm": "0.45.2",
+    "esbuild": "0.25.12",
+    "wrangler": "4.92.0",
+    "qrcode-generator": "1.4.4"
   }
 }

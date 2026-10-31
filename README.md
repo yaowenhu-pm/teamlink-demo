@@ -1,53 +1,47 @@
-# TeamLink
+# TeamLink · 一起动手想
 
-[官网](https://yaowenhu.cn/teamlink-demo/) · [打开工作区](https://yaowenhu.cn/teamlink-demo/app/) · 无需登录，打开即可修改。
+[共享风景入口](https://teamlink-handoff.yaowen-hu.chatgpt.site/) · [GitHub Pages 入口](https://yaowenhu.cn/teamlink-demo/)
 
-围绕一个正在运行的产品原型，直接改内容、数据和行为规则，看见结果；保存不同方案，给具体版本留下批注，再把问题交给自己的 Codex。收到提案后先查看差异与计算影响，再决定采纳。
-
-## 官网与工作区
-
-官网首屏提供一个可直接改标题和规则的产品片段，结果由工作区同一模型计算。“带着这一版，继续改”会把当前内容带进工作区副本。官网还介绍工作方式、与已有工具的角色关系、常见问题，并提供手机体验二维码。
-
-旧根路径带 `#doc=` 的分享链接会保留内容跳转到 `app/`；正常本地作品与项目存档仍使用原存储键。
+直接拖动太阳、点击树木调整枝形，或者对风景说一句话。扫码后，手机与大屏连接同一个房间；修改由服务端保存，其他设备约每 1–2 秒轮询同步。无需安装或登录。
 
 ## 先试一次
 
-1. 打开“作品与规则”，切换“超时以后，保留选好的筛选条件”。默认例子的文件从 10 条变为最初选中的 3 条，结果在作品旁边更新。
-2. 在右侧给方案命名并保存。继续修改后，可选一个保存的版本作对照或恢复；恢复也可撤销。
-3. 在“批注”中选择内容、规则、数据或判断期望，记录问题；批注保存当时的作品快照。
-4. 在“Agent 交接”里写明确问题，复制任务给自己的 Codex，或下载任务 JSON。网页不自动启动 Agent。
-5. 把 Codex 返回的 JSON 提案粘贴或导入，检查字段差异与结果，再点击采纳。若当前作品已经改变，旧提案不能覆盖它，应基于新版本重新委托。
+1. 打开风景，拖动太阳，或观察并调整落叶轨迹。
+2. 点击“扫码一起改”，用手机扫描当前房间二维码。
+3. 在手机上说“下点小雨”或“树再多一些，风轻一点”，核对消息结果和大屏变化。
+4. 使用撤销恢复最近一次场景修改。遇到版本冲突，先查看最新状态，再重新确认操作。
 
-“分享作品”生成一份可继续编辑的副本链接。“导出项目”包含作品、命名方案、批注和本地活动，可通过已有飞书会话或 GitHub 附件异步传递；收件人导入后继续工作。
+对话通过 ClawHunt 接口调用豆包，默认模型为 `doubao-seed-2.1-lite`。模型提出参数修改，服务器校验字段、范围和当前版本后才应用。当前支持时间、树木、花朵、风雨、树枝形态、帆船及场景排列；不会任意生成或执行代码。未配置模型时明确显示有限调景指令模式。
 
-## 当前能力与边界
+## 数据与共享边界
 
-| 已实现 | 使用边界 |
-| --- | --- |
-| 内容、数据、规则直接修改；请求、轨迹、CSV同源计算 | 这是有明确字段的导出产品模型，不能生成任意应用，也不连接真实导出服务 |
-| 命名快照、版本对照、撤销/重做 | 保存在浏览器，最多12个命名版本 |
-| 关联批注与当时快照 | 署名自行填写，不代表已认证的团队成员；最多30条批注 |
-| 外部 Agent 任务包、提案预览、完整基准版本冲突拦截 | 没有内置大模型、后台执行或自动判定验收；提案作者与说明未经身份验证 |
-| 作品副本链接、完整项目包导入导出 | 异步副本协作，没有实时共享房间、自动合并或飞书／GitHub自动写入 |
+- **发送对话时，当前这条消息和当前场景参数会经服务器发送到 ClawHunt，由其提供豆包解释服务。** 房间场景、消息和撤销快照保存在 Cloudflare D1，持有编辑链接的人可以读取和修改。
+- 房间链接包含随机访问凭证，有效期 6 小时；过期后拒绝读写，过期记录随后有界清理。链接代表访问能力，消息不代表经过认证的成员身份。
+- 每房间最多 64 条操作、20 次模型请求；全站每天最多 200 次模型请求。失败调用也可能占用额度。同一请求编号重放不会重复调用模型，冲突不会静默覆盖其他端的修改。
+- 演示从独立的虚构风景开始，不接入私人 `team-relay` 数据、个人 Codex、真实飞书或 GitHub 写入。请使用适合房间参与者和第三方服务接收的内容。
+- `CLAW_API_KEY` 和 `ROOM_IP_SALT` 仅由维护者配置在服务端。创建限流保存按小时加盐的 IP 摘要，不保存原始 IP；密钥不得放入网页、二维码、源码或导出文件。
 
-体验起点使用虚构数据。页面不上传编辑内容，没有埋点或第三方运行依赖。分享链接和项目包可携带编辑内容，请自行选择适合接收人的版本。真实团队的 Codex＋飞书＋GitHub服务与公开工作区分别维护。
+原官网和导出工作区保留在 `/legacy/`、`/legacy/app/`。旧作品链接与原本浏览器存储继续兼容；历史导出工作区使用副本分享，与当前共享房间的同步机制不同。
 
-![默认工作区入口二维码](dist/assets/teamlink-app-qr.png)
+## 本地开发
 
-## 本地运行
-
-无需安装依赖，现代浏览器和 Node.js 即可：
+使用 Node.js 24 和 npm。维护者先配置未跟踪的本地服务端环境键：`CLAW_API_KEY`、`ROOM_IP_SALT`；模型可选项为 `CLAW_MODEL`，接口地址限制为 ClawHunt。
 
 ```sh
-python3 -m http.server 4328 --directory dist
-node --test test/canvas-model.test.mjs test/collaboration-model.test.mjs test/shared-storage.test.mjs
+npm ci
+npm test
+npm run build
+npx wrangler d1 migrations apply DB --local --config wrangler.json
+npm run preview
 ```
 
-打开 http://localhost:4328 查看官网，http://localhost:4328/app/ 打开工作区。
+打开 [本地预览](http://localhost:4328)。本地 D1 与托管 D1 分离。公共源码不携带私有 Sites 项目身份；本地构建无需 `project_id`，发布自己的站点时按 `.openai/hosting.example.json` 配置自己的项目身份。
 
-- [使用与交接](docs/EXPERIENCE.md)
-- [GatherThread 对照和优化决策](docs/GATHERTHREAD_REVIEW.md)
-- [验证记录](docs/VERIFICATION.md)
-- [设计原则](docs/PRINCIPLE_AND_SCOPE.md)
+- `web/`：风景页面、交互、绘制与场景模型；`web/legacy/` 保留历史体验。
+- `worker/`：同源资源与房间 API、ClawHunt 适配器。
+- `db/schema.ts`、`drizzle/`：D1 表结构与版本化迁移；改结构后运行 `npm run db:generate`。
+- `dist/`：构建生成的 Worker、内嵌前端与 `.openai/drizzle` 迁移产物，不是手写源码目录。
 
-本次借鉴 GatherThread 的项目语境、显式委托和版本审阅方式，未复制其代码或素材。直接操作原则参考 Bret Victor 的 [Learnable Programming](https://worrydream.com/LearnableProgramming/) 与 [Explorable Explanations](https://worrydream.com/ExplorableExplanations/)。
+CI 检查语法、全部模型/房间/适配器测试及构建，不需要真实密钥、不调用真实模型或执行部署。实际线上模型连接、实体扫码和手机双端 UI 仍需发布后分别验收；自动检查不代表这些链路已通过。
+
+直接操作和可见过程参考 Bret Victor 的 [Inventing on Principle](https://worrydream.com/InventingOnPrinciple/)、[Learnable Programming](https://worrydream.com/LearnableProgramming/) 与 [Explorable Explanations](https://worrydream.com/ExplorableExplanations/)。

@@ -1,4 +1,4 @@
-name: demo checks
+name: TeamLink checks
 on:
   push:
   pull_request:
@@ -12,8 +12,21 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '24'
-      - run: node --check dist/app.mjs
-      - run: node --check dist/collaboration-ui.mjs
-      - run: node --check dist/website.mjs
-      - run: node --check dist/legacy-route.js
-      - run: node --test test/canvas-model.test.mjs test/collaboration-model.test.mjs test/shared-storage.test.mjs
+          cache: npm
+      - run: npm ci --no-audit --no-fund
+      - name: Check browser and Worker source syntax
+        run: |
+          node --check web/world.mjs
+          node --check web/scene-model.mjs
+          node --check web/scene-renderer.mjs
+          node --check worker/index.mjs
+          node --check worker/rooms.mjs
+          node --check worker/interpret.mjs
+          node --check scripts/build-landscape.mjs
+          node --check web/legacy/app.mjs
+          node --check web/legacy/collaboration-ui.mjs
+          node --check web/legacy/website.mjs
+          node --check web/legacy/legacy-route.js
+      - run: npm test
+      - name: Build embedded assets and D1 migration artifact
+        run: npm run build

@@ -1,9 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {createDocument, updateDocument, serializeDocument} from '../dist/canvas-model.mjs';
+import {createDocument, updateDocument, serializeDocument} from '../web/legacy/canvas-model.mjs';
 import {CanvasCollaborationError, COLLAB_LIMITS, ANCHORS, createProject, validateProject, updateProject,
   revisionOf, saveVersion, removeVersion, addNote, removeNote, recordActivity, createAgentTask, validateProposal, parseProposal,
-  previewProposal, applyProposal, exportProject, importProject} from '../dist/collaboration-model.mjs';
+  previewProposal, applyProposal, exportProject, importProject} from '../web/legacy/collaboration-model.mjs';
 
 const hasCode = code => error => error instanceof CanvasCollaborationError && error.code === code;
 const proposalFor = (document, patch = {rules: {preserveFilters: true}}, extra = {}) => ({schemaVersion: 1,

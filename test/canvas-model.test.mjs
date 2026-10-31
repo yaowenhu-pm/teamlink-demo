@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { CanvasModelError, LIMITS, createDocument, validateDocument, updateDocument, evaluateExport,
-  evaluateContexts, filterRows, toCsv, serializeDocument, parseDocument, encodeFragment, decodeFragment } from '../dist/canvas-model.mjs';
+  evaluateContexts, filterRows, toCsv, serializeDocument, parseDocument, encodeFragment, decodeFragment } from '../web/legacy/canvas-model.mjs';
 
 const errorCode = (code) => (error) => error instanceof CanvasModelError && error.code === code;
 const ids = (rows) => rows.map((row) => row.id);

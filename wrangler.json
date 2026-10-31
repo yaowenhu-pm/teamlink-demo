@@ -1,0 +1,6 @@
+{
+  "name":"teamlink-landscape-local",
+  "main":"dist/server/index.js",
+  "compatibility_date":"2026-04-01",
+  "d1_databases":[{"binding":"DB","database_name":"teamlink-landscape-local","database_id":"00000000-0000-0000-0000-000000000072","migrations_dir":"drizzle"}]
+}

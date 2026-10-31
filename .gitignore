@@ -5,3 +5,9 @@ artifacts/
 .site-workflow/
 .openai/*.local.json
 .DS_Store
+
+.dev.vars
+.dev.vars.*
+.wrangler/
+.sites-runtime/
+dist/
