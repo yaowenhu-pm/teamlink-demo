@@ -3,6 +3,8 @@ export const SCENE_LIMITS = Object.freeze({
   seed: Object.freeze({ min: 0, max: 4294967295, integer: true }),
   hour: Object.freeze({ min: 0, max: 24 }),
   trees: Object.freeze({ min: 0, max: 100, integer: true }),
+  boats: Object.freeze({ min: 0, max: 8, integer: true }),
+  mountains: Object.freeze({ min: 0, max: 8, integer: true }),
   rain: Object.freeze({ min: 0, max: 1 }),
   wind: Object.freeze({ min: 0, max: 1 }),
   branchAngle: Object.freeze({ min: 5, max: 80 }),
@@ -11,11 +13,13 @@ export const SCENE_LIMITS = Object.freeze({
 });
 
 const DEFAULT_SCENE = Object.freeze({ schemaVersion: 1, seed: 72, hour: 18.3, trees: 40,
-  rain: 0, wind: 0.3, branchAngle: 32, branchDepth: 5, boat: true, flowers: 30 });
+  rain: 0, wind: 0.3, branchAngle: 32, branchDepth: 5, boats: 1, mountains: 2, boat: true, flowers: 30 });
 const LABELS = Object.freeze({ seed: '场景种子', hour: '时间', trees: '树木', rain: '雨量', wind: '风力',
-  branchAngle: '树枝角度', branchDepth: '树枝层数', boat: '帆船', flowers: '花朵' });
+  branchAngle: '树枝角度', branchDepth: '树枝层数', boats: '帆船数量', mountains: '山峰数量', boat: '帆船', flowers: '花朵' });
 const FIELDS = Object.keys(DEFAULT_SCENE);
 const EDITABLE_FIELDS = FIELDS.filter((key) => key !== 'schemaVersion');
+const CANONICAL_FIELDS = EDITABLE_FIELDS.filter((key) => key !== 'boat');
+const LEGACY_OPTIONAL_FIELDS = ['boats', 'mountains'];
 const own = (object, key) => Object.prototype.hasOwnProperty.call(object, key);
 const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
 const rounded = (value) => Math.round(value * 1e6) / 1e6;
@@ -59,10 +63,14 @@ export function createScene() { return Object.freeze({ ...DEFAULT_SCENE }); }
 export function validateScene(scene) {
   assertRecord(scene, '场景');
   const keys = Object.getOwnPropertyNames(scene);
-  if (keys.length !== FIELDS.length || keys.some((key) => !FIELDS.includes(key)) ||
-      FIELDS.some((key) => !own(scene, key))) throw new SceneModelError('场景字段不完整或含有未知字段。');
+  if (keys.some((key) => !FIELDS.includes(key)) ||
+      FIELDS.some((key) => !own(scene, key) && !LEGACY_OPTIONAL_FIELDS.includes(key))) throw new SceneModelError('场景字段不完整或含有未知字段。');
   const copy = {};
-  for (const key of FIELDS) { assertValue(key, scene[key]); copy[key] = scene[key]; }
+  for (const key of FIELDS) {
+    const value = own(scene, key) ? scene[key] : key === 'boats' ? (scene.boat ? 1 : 0) : DEFAULT_SCENE[key];
+    assertValue(key, value); copy[key] = value;
+  }
+  if (copy.boat !== (copy.boats > 0)) throw new SceneModelError('帆船显示状态必须与帆船数量一致。');
   return Object.freeze(copy);
 }
 
@@ -73,18 +81,26 @@ export function updateScene(scene, patch) {
     if (!EDITABLE_FIELDS.includes(key)) throw new SceneModelError(`不允许修改字段：${key}。`, 'INVALID_PATCH');
     assertValue(key, patch[key]);
   }
-  return validateScene({ ...current, ...patch });
+  if (own(patch, 'boats') && own(patch, 'boat') && patch.boat !== (patch.boats > 0)) {
+    throw new SceneModelError('帆船数量与显示状态矛盾。', 'INVALID_PATCH');
+  }
+  const next = { ...current, ...patch };
+  if (own(patch, 'boats')) next.boat = patch.boats > 0;
+  else if (own(patch, 'boat')) next.boats = patch.boat ? Math.max(1, current.boats) : 0;
+  return validateScene(next);
 }
 
 export function sceneChanges(before, after) {
   const a = validateScene(before), b = validateScene(after);
-  return Object.freeze(EDITABLE_FIELDS.filter((key) => a[key] !== b[key])
+  return Object.freeze(CANONICAL_FIELDS.filter((key) => a[key] !== b[key])
     .map((key) => Object.freeze({ key, label: LABELS[key], before: a[key], after: b[key] })));
 }
 
 // Only decimal literals and common Chinese integer forms are accepted. No expressions or code.
 const NUM = '[-+]?(?:\\d+(?:\\.\\d+)?|[零〇一二两三四五六七八九十百千]+)';
 function number(value) {
+  const english = { zero: 0, one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10, a: 1, an: 1 };
+  if (own(english, value)) return english[value];
   if (/^[-+]?\d+(?:\.\d+)?$/.test(value)) return Number(value);
   const digits = { 零: 0, 〇: 0, 一: 1, 二: 2, 两: 2, 三: 3, 四: 4, 五: 5, 六: 6, 七: 7, 八: 8, 九: 9 };
   if (/^[零〇一二两三四五六七八九]+$/.test(value)) return Number([...value].map((c) => digits[c]).join(''));
@@ -112,9 +128,39 @@ function relative(scene, key, amount) {
   return { [key]: rounded(clamp(scene[key] + amount, min, max)) };
 }
 
+const COUNT_NUM = `(?:${NUM}|zero|one|two|three|four|five|six|seven|eight|nine|ten|a|an)`;
+const COUNT_OBJECTS = Object.freeze([
+  { key: 'boats', chinese: '(?:帆船|小船|船)', measure: '(?:艘|只|条)', english: '(?:sailboats?|boats?)' },
+  { key: 'mountains', chinese: '(?:山峰|山脉|高山|山)', measure: '(?:座|个)', english: 'mountains?' },
+]);
+const TREE_OBJECT = { key: 'trees', chinese: '(?:树木|树)', measure: '(?:棵)', english: 'trees?' };
+function removesAll(clause, { chinese: object, english }) {
+  return rx(`(?:移除|去掉|删除|清空|隐藏|不要|没有|不显示)(?:所有|全部|这些|任何)?(?:的)?${object}${CH_END}|(?:所有|全部)?${object}(?:全部|都)?(?:移除|去掉|删除|清空|隐藏|不要|没有|消失)${CH_END}|(?:remove|delete|clear|hide)(?: all)?(?: the)? ${english}|(?:no|zero) ${english}|${english} (?:are )?(?:gone|removed)`).test(clause);
+}
+function parseObjectCount(clause, scene, { key, chinese: object, measure, english }) {
+  let match = clause.match(rx(`(?:再)?(增加|添加|加上|加|减少|移除|删掉|去掉|减|多|少)(${COUNT_NUM})${measure}?${object}${CH_END}|${object}(?:的数量|数量)?(?:再|变)?(增加|减少|加|减|多|少)(${COUNT_NUM})${measure}?${CH_END}|(add|remove) (${COUNT_NUM}) ${english}|(increase|decrease) (?:the )?${english} by (${COUNT_NUM})`));
+  if (match) {
+    const verb = match[1] ?? match[3] ?? match[5] ?? match[7];
+    const amount = number(match[2] ?? match[4] ?? match[6] ?? match[8]);
+    if (!Number.isInteger(amount) || amount < 0) return null;
+    const decrease = ['减少', '移除', '删掉', '去掉', '减', '少', 'remove', 'decrease'].includes(verb);
+    return { [key]: scene[key] + amount * (decrease ? -1 : 1) };
+  }
+  match = clause.match(rx(`${object}(?:的数量|数量)?(?:${CH_SET})?(${COUNT_NUM})${measure}?${CH_END}|(${COUNT_NUM})${measure}${object}${CH_END}|(?:set )?(?:the )?${english}(?: to)? (${COUNT_NUM})|(${COUNT_NUM}) ${english}`));
+  if (match) return { [key]: number(match[1] ?? match[2] ?? match[3] ?? match[4]) };
+  match = clause.match(rx(`(?:再)?(多|少|增加|减少|添加|移除)(?:几${measure}?|一?点|一些)${object}${CH_END}|${object}(?:的数量|数量)?(?:再|变)?(多|少|增加|减少)(?:几${measure}?|一?点|一些)?${CH_END}|(?:a few )?(more|fewer|less) ${english}|(?:make )?${english} (more|fewer|less)`));
+  if (match) {
+    const decrease = ['少', '减少', '移除', 'fewer', 'less'].includes(match[1] ?? match[2] ?? match[3] ?? match[4]);
+    return relative(scene, key, decrease ? -2 : 2);
+  }
+  return null;
+}
+
 function parseClause(raw, scene) {
   const clause = raw.replace(/^(?:请|麻烦)?(?:帮我)?(?:把|将|让)?/u, '').replace(/[!！?？]+$/u, '').trim();
   let match;
+  for (const object of [TREE_OBJECT, ...COUNT_OBJECTS]) if (removesAll(clause, object)) return { [object.key]: 0 };
+  for (const object of COUNT_OBJECTS) { const patch = parseObjectCount(clause, scene, object); if (patch) return patch; }
   // These are explicit negated commands; other negations never reach positive patterns.
   if (rx(`(?:不要|不用|别|停止|取消|关闭)(?:再)?下雨${CH_END}|不下雨${CH_END}|雨(?:停|停下|停止|取消)${CH_END}|(?:stop|remove|disable|no) (?:the )?rain|(?:turn|switch) (?:the )?rain off`).test(clause)) return { rain: 0 };
   if (rx(`(?:风停|停风|无风|风停下|风停止)${CH_END}|(?:不要|停止|关闭)(?:吹风|风)${CH_END}|(?:stop|disable|no) (?:the )?wind|(?:turn|switch) (?:the )?wind off`).test(clause)) return { wind: 0 };
@@ -178,7 +224,7 @@ function parseClause(raw, scene) {
 
 function unsupported(reason) {
   return Object.freeze({ supported: false, patch: Object.freeze({}), changes: Object.freeze([]),
-    reply: `本地调景规则未执行：${reason} 可试「改成夜晚，树多一点，风小一点」；目前支持时间、太阳高低、树花数量、雨、风、树枝角度/层数和帆船。` });
+    reply: `本地调景规则未执行：${reason} 可试「改成夜晚，树多一点，增加两艘船」；目前支持时间、太阳高低、树花船山数量、移除全部树、雨、风和树枝角度/层数。` });
 }
 
 /** Complete clause matching is intentional: no silent partial application of unknown instructions. */

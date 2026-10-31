@@ -5,12 +5,13 @@ import {createScene, updateScene, sceneChanges, SCENE_LIMITS} from '../web/scene
 import {SceneCodeError, SCENE_CODE_MAX_BYTES, SCENE_CODE_FIELDS, SCENE_LOGIC_SOURCES,
   formatSceneCode, parseSceneCode, sceneCodeDiff} from '../web/scene-code.mjs';
 
-test('formatted code contains all nine editable fields and roundtrips the actual scene', () => {
+test('formatted code contains ten canonical editable fields and roundtrips the actual scene', () => {
   const scene = updateScene(createScene(), {hour: 22, seed: 4294967295, boat: false, wind: 0.12});
   const text = formatSceneCode(scene), object = JSON.parse(text), restored = parseSceneCode(text, createScene());
-  assert.equal(SCENE_CODE_FIELDS.length, 9);
-  assert.deepEqual(Object.keys(object), Object.keys(scene).filter(key => key !== 'schemaVersion'));
+  assert.equal(SCENE_CODE_FIELDS.length, 10);
+  assert.deepEqual(Object.keys(object), Object.keys(scene).filter(key => !['schemaVersion', 'boat'].includes(key)));
   assert.equal(object.schemaVersion, undefined);
+  assert.equal(object.boat, undefined); assert.equal(object.boats, 0); assert.equal(object.mountains, 2);
   assert.deepEqual(restored.patch, object); assert.deepEqual(restored.scene, scene);
   assert.ok(Object.isFrozen(restored)); assert.ok(Object.isFrozen(restored.patch)); assert.ok(Object.isFrozen(restored.scene));
 });
@@ -31,10 +32,23 @@ test('diffs identify only the actual changed fields, with the model labels and v
   const before = createScene(), after = updateScene(before, {trees: 0, boat: false, hour: 24});
   const diff = sceneCodeDiff(before, after);
   assert.deepEqual(diff, sceneChanges(before, after));
-  assert.deepEqual(diff.map(item => item.key), ['hour', 'trees', 'boat']);
+  assert.deepEqual(diff.map(item => item.key), ['hour', 'trees', 'boats']);
   assert.deepEqual(diff.find(item => item.key === 'trees'), {key: 'trees', label: '树木', before: 40, after: 0});
   assert.ok(Object.isFrozen(diff)); assert.ok(diff.every(Object.isFrozen));
   assert.deepEqual(sceneCodeDiff(before, before), []);
+});
+
+test('count parameters and old boat patches share the same normalized scene and actual diff', () => {
+  const base = createScene();
+  const counts = parseSceneCode('{"boats":4,"mountains":0}', base);
+  assert.equal(counts.scene.boat, true); assert.equal(counts.scene.boats, 4); assert.equal(counts.scene.mountains, 0);
+  const old = parseSceneCode('{"boat":false}', counts.scene);
+  assert.deepEqual(old.patch, { boat: false }); assert.equal(old.scene.boats, 0);
+  assert.deepEqual(sceneCodeDiff(counts.scene, old.scene), [{key: 'boats', label: '帆船数量', before: 4, after: 0}]);
+  assert.throws(() => parseSceneCode('{"boats":4,"boat":false}', base), SceneCodeError);
+  const legacy = { ...base }; delete legacy.boats; delete legacy.mountains;
+  assert.equal(JSON.parse(formatSceneCode(legacy)).boats, 1);
+  assert.deepEqual(parseSceneCode(formatSceneCode(legacy), legacy).scene, base);
 });
 
 test('both limits for every numeric field parse through the real model and out-of-range values reject', () => {

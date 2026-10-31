@@ -35,7 +35,7 @@ test('provider request is fixed, authenticated once and includes only current sc
   assert.match(body.messages[0].content, /没有历史/);
   assert.deepEqual(JSON.parse(body.messages[1].content), { currentScene: current, instruction: '改成夜晚，树多一点，隐藏帆船' });
   assert.equal(request.body.includes('test-key-only'), false);
-  assert.deepEqual(result.patch, { hour: 22, trees: 55, boat: false });
+  assert.deepEqual(result.patch, { hour: 22, trees: 55, boats: 0 });
   assert.deepEqual(result.changes, sceneChanges(current, updateScene(current, result.patch)));
   assert.equal(result.mode, 'ai'); assert.equal(result.supported, true);
   assert.match(result.reply, /时间→22/); assert.doesNotMatch(result.reply, /邮件/);
@@ -72,7 +72,7 @@ test('an explicit boat restoration may still be interpreted from the current sce
   let calls = 0;
   const interpret = createInterpreter(ENV, { fetcher: async () => { calls++; return Response.json(completion(modelResult({ boat: true }))); } });
   const result = await interpret('恢复帆船', updateScene(createScene(), { boat: false }));
-  assert.equal(calls, 1); assert.deepEqual(result.patch, { boat: true });
+  assert.equal(calls, 1); assert.deepEqual(result.patch, { boats: 1 });
 });
 
 test('malicious bases, missing credentials and invalid model configuration never trigger fetch', async () => {
@@ -99,10 +99,27 @@ test('model objects have exact fields, safe types and bounded non-empty replies'
 test('unknown schema/code fields, bad numeric types/bounds and unsupported patches are rejected', async () => {
   const patches = [{ unknown: 1 }, { code: 'eval(1)' }, { schemaVersion: 1 }, { hour: '22' }, { trees: 2.5 },
     { trees: 101 }, { flowers: -1 }, { rain: 2 }, { wind: null }, { branchAngle: 4 }, { branchDepth: 9 },
-    { boat: 1 }, { seed: 4294967296 }, JSON.parse('{"__proto__":{"polluted":true}}')];
+    { boat: 1 }, { boats: 9 }, { boats: 0, boat: true }, { boats: 2, boat: false }, { mountains: -1 },
+    { mountains: 2.5 }, { boats: '3' }, { seed: 4294967296 }, JSON.parse('{"__proto__":{"polluted":true}}')];
   for (const patch of patches) await assert.rejects(createInterpreter(ENV, { fetcher: gateway(modelResult(patch)) })('夜晚', createScene()), code('BAD_MODEL_RESULT'));
   await assert.rejects(createInterpreter(ENV, { fetcher: gateway({ supported: false, patch: { hour: 22 }, reply: '不能执行。' }) })('夜晚', createScene()), code('BAD_MODEL_RESULT'));
   assert.equal({}.polluted, undefined);
+});
+
+test('AI count patches and tree removal use real normalized values and bounded parameters', async () => {
+  const legacy = { ...createScene() }; delete legacy.boats; delete legacy.mountains;
+  let prompt, sent;
+  const interpret = createInterpreter(ENV, { fetcher: async (_url, options) => {
+    const body = JSON.parse(options.body); prompt = body.messages[0].content; sent = JSON.parse(body.messages[1].content);
+    return Response.json(completion(modelResult({ boats: 3, mountains: 4, trees: 0 })));
+  } });
+  const result = await interpret('增加两艘船，多几座山，树全部移除', legacy);
+  assert.deepEqual(result.patch, { trees: 0, boats: 3, mountains: 4 });
+  assert.equal(updateScene(legacy, result.patch).boat, true);
+  assert.equal(sent.currentScene.boats, 1); assert.equal(sent.currentScene.mountains, 2);
+  assert.match(prompt, /boats 整数 0–8/); assert.match(prompt, /mountains 整数 0–8/);
+  assert.match(prompt, /不要树/); assert.match(prompt, /remove all trees/);
+  assert.deepEqual(result.changes.map(item => item.key), ['trees', 'boats', 'mountains']);
 });
 
 test('same-value patches cannot claim that the model changed anything', async () => {

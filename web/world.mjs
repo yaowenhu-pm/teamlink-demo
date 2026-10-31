@@ -28,7 +28,7 @@ function renderControls(){
  $('#send').disabled=busy||connecting||codeDraft;$$('.suggestions button').forEach(button=>button.disabled=busy||connecting||codeDraft);$('#share-world').disabled=busy&&!room;
  $('#suggestions').hidden=!!lastReply||!!room?.messages?.length;
  $('#play-leaf').textContent=playing?'Ⅱ':'▶';
- document.body.classList.toggle('night-scene',scene.hour<6||scene.hour>=19.5);document.body.dataset.hour=String(scene.hour);document.body.dataset.trees=String(scene.trees);document.body.dataset.revision=String(room?.revision??0);
+ document.body.classList.toggle('night-scene',scene.hour<6||scene.hour>=19.5);document.body.dataset.hour=String(scene.hour);document.body.dataset.trees=String(scene.trees);document.body.dataset.boats=String(scene.boats);document.body.dataset.mountains=String(scene.mountains);document.body.dataset.revision=String(room?.revision??0);
  codePanel?.update(scene,{before:codeBefore??scene,selected,busy:busy||connecting});
 }
 function render(){renderer.render(scene,{phase,showTrajectory:selected==='leaf',compareScene:leafCompare});if(document.body.classList.contains('mobile-code-open'))previewRenderer.render(scene,{phase,showTrajectory:selected==='leaf',compareScene:leafCompare});renderControls();}
@@ -47,7 +47,7 @@ function renderMessages(){
  else if(last.kind==='failed')status('这次没有应用修改，可以换一句再试。');
  else if(last.kind==='patch')status('直接调整 · 已同步到同一风景');
  else if(last.kind==='undo')status('已撤销 · 同一风景已更新');
- else if(last.kind==='unsupported')status('可以再试试改变时间、风雨或树木。');
+ else if(last.kind==='unsupported')status('可以再试试改变船、山、树木、时间或风雨。');
  else status(room.mode==='ai'?'豆包理解 · 修改已同步到同一风景':'调景指令模式 · 修改已同步');
 }
 function acceptState(state){
@@ -153,13 +153,49 @@ $$('[data-scroll]').forEach(button=>button.addEventListener('click',()=>scrollTo
 $$('[data-start]').forEach(button=>button.addEventListener('click',()=>{scrollToElement('experience');$('#instruction').focus({preventScroll:true});quietOpening();}));
 $$('[data-share]').forEach(button=>button.addEventListener('click',()=>{scrollToElement('experience');$('#share-world').click();}));
 $$('[data-explore]').forEach(button=>button.addEventListener('click',()=>{scrollToElement('experience');inspector(button.dataset.explore);}));
-let focusScroll=0;
-function setFocusMode(enabled){if(enabled)focusScroll=window.scrollY;document.body.classList.toggle('focus-mode',enabled);$('#focus-world').setAttribute('aria-pressed',String(enabled));$('#focus-world').setAttribute('aria-label',enabled?'收起风景':'展开风景');if(!enabled)window.scrollTo({top:focusScroll,behavior:'instant'});keyboardViewport();render();}
-$('#focus-world').addEventListener('click',()=>setFocusMode(!document.body.classList.contains('focus-mode')));
+let focusScroll=0,nativePresentation=false,presentationTimer;
+const fullscreenElement=()=>document.fullscreenElement??document.webkitFullscreenElement;
+function revealPresentationTools(){
+ clearTimeout(presentationTimer);stage.classList.add('presentation-ui-visible');
+ presentationTimer=setTimeout(()=>{if(!$('#presentation-tools').contains(document.activeElement))stage.classList.remove('presentation-ui-visible');},2600);
+}
+function setFocusMode(enabled){
+ const wasEnabled=document.body.classList.contains('focus-mode');if(enabled&&!wasEnabled)focusScroll=window.scrollY;
+ document.body.classList.toggle('focus-mode',enabled);$('#focus-world').setAttribute('aria-pressed',String(enabled));
+ $('#focus-world').setAttribute('aria-label',enabled?'退出风景全屏':'全屏展示风景');
+ if(enabled){quietOpening();$('#inspector').hidden=true;revealPresentationTools();}
+ else{clearTimeout(presentationTimer);stage.classList.remove('presentation-ui-visible');if(wasEnabled)window.scrollTo({top:focusScroll,behavior:'instant'});$('#focus-world').focus({preventScroll:true});}
+ keyboardViewport();render();updateIntroPlayback();
+}
+async function enterPresentation(){
+ setFocusMode(true);
+ try{
+  if(stage.requestFullscreen)await stage.requestFullscreen({navigationUI:'hide'});
+  else if(stage.webkitRequestFullscreen)await stage.webkitRequestFullscreen();
+  else toast('当前浏览器不支持整屏展示，已铺满网页；电脑可使用浏览器的全屏命令。');
+ }catch{toast('浏览器未允许整屏展示，已铺满网页；可使用浏览器的全屏命令。');}
+}
+async function exitPresentation(){
+ try{if(fullscreenElement()===stage){if(document.exitFullscreen)await document.exitFullscreen();else if(document.webkitExitFullscreen)await document.webkitExitFullscreen();}}catch{}
+ if(fullscreenElement()!==stage){nativePresentation=false;setFocusMode(false);}
+}
+$('#focus-world').addEventListener('click',()=>document.body.classList.contains('focus-mode')?exitPresentation():enterPresentation());
+$('#exit-presentation').addEventListener('click',exitPresentation);
+function fullscreenChanged(){
+ if(fullscreenElement()===stage){nativePresentation=true;setFocusMode(true);}
+ else if(nativePresentation){nativePresentation=false;setFocusMode(false);}
+}
+document.addEventListener('fullscreenchange',fullscreenChanged);document.addEventListener('webkitfullscreenchange',fullscreenChanged);
+for(const name of ['pointermove','pointerdown','focusin'])stage.addEventListener(name,()=>{if(document.body.classList.contains('focus-mode'))revealPresentationTools();});
+$('#presentation-tools').addEventListener('focusout',()=>{if(document.body.classList.contains('focus-mode'))revealPresentationTools();});
 function updateCodeToggle(){const mobile=matchMedia('(max-width:900px)').matches;const visible=mobile?document.body.classList.contains('mobile-code-open'):!document.body.classList.contains('code-hidden');$('#toggle-code').setAttribute('aria-pressed',String(visible));$('#toggle-code-label').textContent=mobile?(visible?'收起代码':'查看代码'):'代码对照';}
 $('#toggle-code').addEventListener('click',()=>{if(matchMedia('(max-width:900px)').matches){document.body.classList.toggle('mobile-code-open');if(document.body.classList.contains('mobile-code-open'))$('.code-side').scrollIntoView({block:'start',behavior:reduced?'instant':'smooth'});}else document.body.classList.toggle('code-hidden');updateCodeToggle();render();});
 matchMedia('(max-width:900px)').addEventListener('change',updateCodeToggle);updateCodeToggle();
-document.addEventListener('keydown',event=>{if(event.key==='Escape'&&!document.querySelector('dialog[open]')&&document.body.classList.contains('focus-mode'))setFocusMode(false);});
+document.addEventListener('keydown',event=>{
+ if(document.querySelector('dialog[open]'))return;
+ if(event.key==='Escape'&&document.body.classList.contains('focus-mode'))exitPresentation();
+ if(event.key.toLowerCase()==='f'&&!event.ctrlKey&&!event.metaKey&&!event.altKey&&!event.repeat&&!event.target.closest('input,textarea,select,[contenteditable]')){event.preventDefault();document.body.classList.contains('focus-mode')?exitPresentation():enterPresentation();}
+});
 new ResizeObserver(()=>render()).observe(stage);
 new IntersectionObserver(entries=>{stageVisible=entries[0]?.isIntersecting??true;if(stageVisible){lastFrame=performance.now();render();}},{rootMargin:'100px'}).observe(stage);
 

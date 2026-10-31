@@ -129,6 +129,35 @@ test('undo uses the bounded server snapshot stack and never rewinds unrelated me
   });
 });
 
+test('legacy room rows and undo snapshots normalize counts without dropping old boat visibility', async () => {
+  await clock(async advance => {
+    const env = environment();
+    try {
+      const room = await created(env);
+      const legacy = { ...createScene() }; delete legacy.boats; delete legacy.mountains;
+      const legacyHidden = { ...legacy, boat: false };
+      env.DB.database.prepare('UPDATE rooms SET scene_json = ?, history_json = ? WHERE id = ?')
+        .run(JSON.stringify(legacy), JSON.stringify([legacyHidden]), room.id);
+      let response = await handleRooms(request(route(room), {token: room.token}), env), state = await response.json();
+      assert.equal(response.status, 200); assert.equal(state.scene.boats, 1); assert.equal(state.scene.mountains, 2);
+      response = await post(env, room, {nonce: 'new-counts', expectedRevision: 0, patch: {boats: 3, mountains: 5, trees: 0}});
+      state = await response.json(); assert.equal(response.status, 200);
+      assert.equal(state.scene.boats, 3); assert.equal(state.scene.mountains, 5); assert.equal(state.scene.boat, true);
+      assert.deepEqual(state.messages.at(-1).changes.map(item => item.key), ['trees', 'boats', 'mountains']);
+      advance();
+      response = await post(env, room, {nonce: 'undo-counts', expectedRevision: state.revision}, undefined, '/undo');
+      state = await response.json(); assert.equal(response.status, 200);
+      assert.equal(state.scene.boats, 1); assert.equal(state.scene.mountains, 2); assert.equal(state.scene.trees, 40);
+      advance();
+      response = await post(env, room, {nonce: 'undo-old-hidden-boat', expectedRevision: state.revision}, undefined, '/undo');
+      state = await response.json(); assert.equal(response.status, 200);
+      assert.equal(state.scene.boats, 0); assert.equal(state.scene.boat, false); assert.equal(state.scene.mountains, 2);
+      assert.deepEqual(state.messages.at(-1).changes, [{key: 'boats', label: '帆船数量', before: 1, after: 0}]);
+      assert.equal(JSON.parse(env.DB.row(room.id).history_json).length, 0);
+    } finally { env.DB.close(); }
+  });
+});
+
 test('creation rates, active room cap, command cap and room expiry are enforced by persisted state', async () => {
   const env = environment();
   try {

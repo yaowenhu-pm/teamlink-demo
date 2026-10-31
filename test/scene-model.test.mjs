@@ -4,7 +4,7 @@ import { SceneModelError, SCENE_LIMITS, createScene, validateScene, updateScene,
   sceneChanges, interpretInstruction, solarPosition, leafPath } from '../web/scene-model.mjs';
 
 const defaults = { schemaVersion: 1, seed: 72, hour: 18.3, trees: 40, rain: 0,
-  wind: 0.3, branchAngle: 32, branchDepth: 5, boat: true, flowers: 30 };
+  wind: 0.3, branchAngle: 32, branchDepth: 5, boats: 1, mountains: 2, boat: true, flowers: 30 };
 const apply = (text, scene = createScene()) => {
   const parsed = interpretInstruction(text, scene);
   assert.equal(parsed.supported, true, `${text}: ${parsed.reply}`);
@@ -36,14 +36,16 @@ test('strict scene and patch validation reject missing/extra/type/finite/bounds 
   const invalidScenes = [null, [], 'scene', {}, { ...scene, extra: 1 }, { ...scene, schemaVersion: 2 },
     { ...scene, hour: '12' }, { ...scene, wind: Infinity }, { ...scene, rain: NaN },
     { ...scene, trees: 1.5 }, { ...scene, flowers: -1 }, { ...scene, branchDepth: 0 },
-    { ...scene, branchAngle: 81 }, { ...scene, boat: 1 }, { ...scene, seed: 4294967296 }];
+    { ...scene, branchAngle: 81 }, { ...scene, boat: 1 }, { ...scene, seed: 4294967296 },
+    { ...scene, boats: 9 }, { ...scene, mountains: -1 }, { ...scene, boats: 0 }, { ...scene, boat: false }];
   const missing = { ...scene }; delete missing.hour; invalidScenes.push(missing);
   const hiddenExtra = { ...scene }; Object.defineProperty(hiddenExtra, 'extra', { value: 1 }); invalidScenes.push(hiddenExtra);
   const symbolExtra = { ...scene, [Symbol('extra')]: 1 }; invalidScenes.push(symbolExtra);
   for (const value of invalidScenes) assert.throws(() => validateScene(value), SceneModelError);
   for (const patch of [null, [], { unknown: 1 }, { schemaVersion: 1 }, { hour: undefined }, { seed: -1 },
     { hour: -0.1 }, { hour: 24.1 }, { trees: 101 }, { flowers: 2.5 }, { wind: -0.1 }, { rain: 1.1 },
-    { branchDepth: 8.1 }, { branchAngle: 4 }, { boat: 'false' }]) {
+    { branchDepth: 8.1 }, { branchAngle: 4 }, { boat: 'false' }, { boats: 1.5 }, { boats: 9 },
+    { mountains: -1 }, { mountains: '2' }, { boat: true, boats: 0 }, { boat: false, boats: 1 }]) {
     assert.throws(() => updateScene(scene, patch), SceneModelError);
   }
   const hiddenPatch = {}; Object.defineProperty(hiddenPatch, 'unknown', { value: 1 });
@@ -75,7 +77,7 @@ test('Chinese compound instructions apply the actual combined patch atomically',
   const original = createScene();
   const parsed = interpretInstruction('请把天空改成夜晚，树多一点，花少一点；下小雨，然后风大一点，隐藏帆船。', original);
   assert.equal(parsed.supported, true);
-  assert.deepEqual(parsed.patch, { hour: 22, trees: 50, rain: 0.25, wind: 0.5, boat: false, flowers: 20 });
+  assert.deepEqual(parsed.patch, { hour: 22, trees: 50, rain: 0.25, wind: 0.5, boats: 0, flowers: 20 });
   const result = updateScene(original, parsed.patch);
   assert.deepEqual(parsed.changes, sceneChanges(original, result));
   assert.match(parsed.reply, /本地调景规则已执行/);
@@ -173,4 +175,76 @@ test('leaf time is deterministic, wind changes trajectory and rain changes progr
   assert.notEqual(leafPath(updateScene(scene, { seed: 73 }))[0].x, original[0].x);
   assert.deepEqual(leafPath(scene, { samples: 61 })[30], original[15], 'same time produces the same state at a different sampling density');
   for (const samples of [0, 1, 242, 2.5, NaN, '31']) assert.throws(() => leafPath(scene, { samples }), SceneModelError);
+});
+
+test('legacy scenes normalize only the two added count fields without mutating old snapshots', () => {
+  const legacy = { ...createScene() }; delete legacy.boats; delete legacy.mountains;
+  const original = JSON.stringify(legacy), normalized = validateScene(legacy);
+  assert.equal(normalized.boats, 1); assert.equal(normalized.mountains, 2); assert.equal(normalized.boat, true);
+  assert.equal(Object.isFrozen(normalized), true); assert.equal(JSON.stringify(legacy), original);
+  const hiddenBoat = validateScene({ ...legacy, boat: false });
+  assert.equal(hiddenBoat.boats, 0); assert.equal(hiddenBoat.boat, false);
+  assert.deepEqual(sceneChanges(legacy, normalized), []);
+  const partialLegacy = { ...normalized }; delete partialLegacy.mountains;
+  assert.equal(validateScene(partialLegacy).mountains, 2);
+  const missingRequired = { ...legacy }; delete missingRequired.boat;
+  assert.throws(() => validateScene(missingRequired), SceneModelError);
+});
+
+test('boat compatibility derives one canonical count and rejects explicitly contradictory patches', () => {
+  const three = updateScene(createScene(), { boats: 3 });
+  assert.equal(three.boat, true); assert.equal(three.boats, 3);
+  assert.equal(updateScene(three, { boat: true }).boats, 3);
+  const none = updateScene(three, { boat: false });
+  assert.equal(none.boat, false); assert.equal(none.boats, 0);
+  assert.equal(updateScene(none, { boat: true }).boats, 1);
+  assert.equal(updateScene(three, { boats: 0 }).boat, false);
+  assert.equal(updateScene(three, { boats: 0, boat: false }).boats, 0);
+  assert.deepEqual(sceneChanges(three, none), [{ key: 'boats', label: '帆船数量', before: 3, after: 0 }]);
+  assert.throws(() => updateScene(three, { boats: 2, boat: false }), SceneModelError);
+  assert.throws(() => updateScene(three, { boats: 0, boat: true }), SceneModelError);
+  let read = false;
+  for (const field of ['boats', 'mountains']) {
+    const patch = {}; Object.defineProperty(patch, field, { enumerable: true, get() { read = true; return 2; } });
+    assert.throws(() => updateScene(three, patch), SceneModelError);
+    const scene = { ...three }; Object.defineProperty(scene, field, { enumerable: true, get() { read = true; return 2; } });
+    assert.throws(() => validateScene(scene), SceneModelError);
+  }
+  assert.equal(read, false);
+});
+
+test('boat and mountain counts support exact and relative Chinese and English instructions', () => {
+  const base = updateScene(createScene(), { boats: 4, mountains: 4 });
+  const cases = [
+    ['增加两艘船', 'boats', 6], ['添加一艘帆船', 'boats', 5], ['船少两艘', 'boats', 2],
+    ['船改为三艘', 'boats', 3], ['两艘船', 'boats', 2], ['船0艘', 'boats', 0],
+    ['多几座山', 'mountains', 6], ['少几座山', 'mountains', 2], ['山少两座', 'mountains', 2],
+    ['山峰设为8座', 'mountains', 8], ['没有山', 'mountains', 0], ['不要船', 'boats', 0],
+    ['add two boats', 'boats', 6], ['remove two boats', 'boats', 2], ['set boats to three', 'boats', 3],
+    ['more mountains', 'mountains', 6], ['fewer mountains', 'mountains', 2], ['a few more mountains', 'mountains', 6],
+    ['decrease mountains by two', 'mountains', 2], ['set mountains to 0', 'mountains', 0],
+    ['no mountains', 'mountains', 0], ['remove all boats', 'boats', 0],
+  ];
+  for (const [text, key, expected] of cases) {
+    const result = apply(text, base); assert.equal(result[key], expected, text);
+    assert.equal(result.boat, result.boats > 0, text);
+  }
+  const compound = apply('树全部移除，增加两艘船，然后多几座山', createScene());
+  assert.equal(compound.trees, 0); assert.equal(compound.boats, 3); assert.equal(compound.mountains, 4);
+});
+
+test('all-tree removal is literal while unsupported, negated and impossible compound requests stay atomic', () => {
+  for (const text of ['树全部移除', '不要树', '树没有了', '树都没有了', '移除所有树木', 'remove all trees', 'no trees', 'trees are gone']) {
+    assert.equal(apply(text).trees, 0, text);
+  }
+  const base = createScene();
+  for (const text of ['增加九艘船', '山9座', '船2.5艘', '山-1座', 'add ten boats', '山十十座',
+    '不要移除树', 'do not remove all trees', '不要树，然后增加一只猫', '增加两艘船，生成代码',
+    '树全部移除，船9艘', '多几座山，删除数据库']) {
+    const result = interpretInstruction(text, base);
+    assert.equal(result.supported, false, text); assert.deepEqual(result.patch, {}); assert.deepEqual(result.changes, []);
+  }
+  assert.equal(apply('多几座山', updateScene(base, { mountains: 8 })).mountains, 8);
+  assert.equal(apply('少几座山', updateScene(base, { mountains: 0 })).mountains, 0);
+  assert.deepEqual(base, defaults);
 });

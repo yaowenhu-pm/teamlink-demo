@@ -11,6 +11,82 @@ const seeded = (seed) => {
   let state = seed >>> 0;
   return () => { state = (Math.imul(1664525, state) + 1013904223) >>> 0; return state / 4294967296; };
 };
+
+/** Visible SVG coordinates, not CSS pixels. Counts stay readable after slice cropping. */
+export function layoutSceneObjects(value, viewport = {}) {
+  const scene = validateScene(value);
+  const {left = 0, right = WIDTH, top = 0, bottom = HEIGHT} = viewport;
+  if (![left, right, top, bottom].every(Number.isFinite) || left < 0 || right > WIDTH ||
+    top < 0 || bottom > HEIGHT || right <= left || bottom <= top) throw new RangeError('Invalid scene viewport.');
+  const width = right - left;
+  const coastShifts = Object.freeze({left: Math.max(0, left + Math.min(90, width * .12) - 464),
+    right: Math.min(0, right - Math.min(65, width * .1) - 1519)});
+  const mountainRandom = seeded(scene.seed ^ 0x6a09), mountains = [];
+  for (let index = 0; index < scene.mountains; index++) {
+    // The original coastal templates end at the SVG edges. Keep them in their
+    // original one/two-island composition; packed peaks need complete outlines.
+    const template = scene.mountains > 2 ? 'generated' : index === 0 ? 'left' : 'right';
+    if (scene.mountains <= 2) {
+      const shift = coastShifts[template];
+      mountains.push(Object.freeze({id: index, template, peakX: (template === 'left' ? 464 : 1519) + shift,
+        baseY: template === 'left' ? 650 : 721, width: template === 'left' ? 910 : 293,
+        height: template === 'left' ? 333 : 297, transform: 'translate(' + fixed(shift) + ' 0)'}));
+    } else {
+      const cell = width / scene.mountains, peakX = left + (index + .5) * cell + (mountainRandom() - .5) * cell * .1;
+      const baseY = Math.min(598 + mountainRandom() * 12, bottom - 40);
+      const height = Math.max(35, Math.min(130 + mountainRandom() * 90, baseY - top - 18));
+      const mountainWidth = cell * (1.14 + mountainRandom() * .12);
+      const transform = 'translate(' + fixed(peakX) + ' ' + fixed(baseY) + ')';
+      mountains.push(Object.freeze({id: index, template, peakX: fixed(peakX), baseY: fixed(baseY),
+        width: fixed(mountainWidth), height: fixed(height), lean: fixed((mountainRandom() - .5) * .3),
+        shoulder: fixed(.55 + mountainRandom() * .15), transform}));
+    }
+  }
+  const boatRandom = seeded(scene.seed ^ 0xb0a7), boats = [];
+  const boat = (index, x, y, scale, phase) => Object.freeze({id: index, x: fixed(x), y: fixed(y),
+    scale: fixed(scale), phase: fixed(phase), bounds: Object.freeze({left: x - 52 * scale, right: x + 52 * scale,
+      top: y - 65 * scale, bottom: y + 47 * scale})});
+  if (scene.boats === 1) {
+    const scale = Math.min(.82, width / 140, (bottom - Math.max(top, 540)) / 140);
+    const x = clamp(970, left + 52 * scale + 8, right - 52 * scale - 8);
+    const y = clamp(708, Math.max(590, top + 65 * scale + 8), bottom - 47 * scale - 8);
+    boats.push(boat(0, x, y, scale, 0));
+  } else if (scene.boats > 1) {
+    const foregroundEdge = 539 + Math.max(0, left - 330);
+    let seaLeft = Math.max(left + 35, bottom < 820 ? 870 : 600, foregroundEdge + 21), seaRight = Math.min(right - 35, 1320);
+    if (seaRight - seaLeft < 95) { seaLeft = left + width * .12; seaRight = right - width * .12; }
+    const seaWidth = seaRight - seaLeft, columns = Math.min(3, Math.max(1, Math.floor(seaWidth / 95)));
+    const rows = Math.ceil(scene.boats / columns), endY = Math.min(935, bottom - 52);
+    const startY = Math.max(Math.min(625, endY - 35), Math.min(708, endY - (rows - 1) * 90));
+    const gapY = rows > 1 ? (endY - startY) / (rows - 1) : 180;
+    const jitterY = Math.min(5, gapY * .04);
+    for (let index = 0; index < scene.boats; index++) {
+      const row = Math.floor(index / columns), column = index % columns;
+      const rowCount = Math.min(columns, scene.boats - row * columns), cell = seaWidth / rowCount;
+      const jitterX = Math.min(14, cell * .08);
+      const scale = Math.max(.08, Math.min(.9, (cell - 2 * jitterX - 16) / 104,
+        (gapY - 2 * jitterY - 8) / 112)) * (.91 + boatRandom() * .08);
+      const x = seaLeft + (column + .5) * cell + (boatRandom() - .5) * 2 * jitterX;
+      const y = startY + row * gapY + (boatRandom() - .5) * 2 * jitterY;
+      boats.push(boat(index, x, y, scale, boatRandom() * TAU));
+    }
+  }
+  return Object.freeze({boats: Object.freeze(boats), mountains: Object.freeze(mountains), coastShifts});
+}
+
+function generatedMountain(item, id) {
+  const w = item.width / 2, h = item.height, p = item.lean * w, shoulder = item.shoulder, n = fixed;
+  return '<g data-object="mountain" data-mountain-id="' + item.id + '" transform="' + item.transform + '">' +
+    '<path d="M' + n(-w) + ' 0C' + n(-w * .66) + ' ' + n(-h * .1) + ' ' + n(p - w * .48) + ' ' + n(-h * shoulder) +
+    ' ' + n(p - w * .15) + ' ' + n(-h * .82) + 'Q' + n(p) + ' ' + n(-h * 1.06) + ' ' + n(p + w * .16) + ' ' + n(-h * .84) +
+    'C' + n(p + w * .43) + ' ' + n(-h * (shoulder - .1)) + ' ' + n(w * .64) + ' ' + n(-h * .16) + ' ' + n(w) +
+    ' 0Q0 22 ' + n(-w) + ' 0Z" fill="url(#' + id + '-island)"/>' +
+    '<path d="M' + n(p) + ' ' + n(-h) + 'Q' + n(p - w * .03) + ' ' + n(-h * shoulder) + ' ' + n(p + w * .25) +
+    ' ' + n(-h * .25) + 'L' + n(w * .55) + ' 7Q' + n(w * .12) + ' 4 ' + n(p) + ' ' + n(-h) +
+    'Z" fill="var(--land-near)" opacity=".25"/>' +
+    '<path d="M' + n(-w * .87) + ' 4Q0 21 ' + n(w * .88) +
+    ' 3" fill="none" stroke="url(#' + id + '-shore)" stroke-width="2"/></g>';
+}
 const mix = (left, right, ratio) => {
   const a = left.match(/\w\w/g).map((s) => parseInt(s, 16));
   const b = right.match(/\w\w/g).map((s) => parseInt(s, 16));
@@ -94,8 +170,10 @@ export function mountLandscape(svgElement, { onSunDrag, onTreeSelect, onLeafSele
       <circle data-part="sun-core" r="45" fill="url(#${id}-sun)"/>
       <circle data-part="moon-mark" cx="17" cy="-11" r="6" fill="#c4d6cf" opacity="0"/>
     </g>
+    <g data-layer="distant" pointer-events="none">
     <path d="M-30 459C72 446 121 422 187 421S286 447 340 436S421 398 481 400S599 442 676 436S787 409 853 417S964 453 1040 447S1120 420 1191 426S1324 466 1413 443S1544 427 1630 449V510H-30Z" fill="var(--land-far)" opacity=".36"/>
     <path d="M-30 485C79 465 146 453 211 460S305 477 383 463S461 435 520 443S631 477 697 464S808 439 873 451S990 481 1080 465S1211 452 1296 467S1494 452 1630 476V525H-30Z" fill="url(#${id}-distant)" opacity=".65"/>
+    </g>
     <rect x="0" y="431" width="1600" height="94" fill="url(#${id}-haze)"/>
     <rect x="0" y="480" width="1600" height="520" fill="url(#${id}-sea)"/>
     <path d="M0 480H1600" stroke="var(--sky-bottom)" stroke-width="2" opacity=".22"/>
@@ -103,6 +181,8 @@ export function mountLandscape(svgElement, { onSunDrag, onTreeSelect, onLeafSele
     <g data-layer="water" clip-path="url(#${id}-water)" pointer-events="none"></g>
     <g pointer-events="none" fill="var(--sky-bottom)" opacity=".17" filter="url(#${id}-soft)"><ellipse cx="787" cy="491" rx="578" ry="9"/><ellipse cx="1077" cy="519" rx="369" ry="7" opacity=".5"/></g>
     <g data-layer="terrain" pointer-events="none">
+      <g data-layer="mountain-extras"></g>
+      <g data-layer="mountain-left">
       <path d="M-70 543C13 524 73 476 139 454C194 438 224 399 279 390C334 381 361 339 406 317C431 304 451 301 477 317C518 347 533 371 570 386C603 399 619 440 661 462C697 480 717 509 751 523C778 536 812 552 840 577C802 606 746 619 683 630C573 649 474 638 385 650C272 664 185 651 101 636C32 624-26 601-70 583Z" fill="url(#${id}-island)"/>
       <path d="M89 514C168 478 205 465 270 445S362 399 405 356C427 338 445 320 464 314C454 353 432 390 412 422C375 477 315 499 254 510C203 521 150 526 89 533Z" fill="var(--leaf-light)" opacity=".19"/>
       <path d="M466 320C467 365 483 394 506 431C528 467 532 493 566 519C587 536 607 566 622 599C572 579 552 563 532 532C506 494 497 465 476 426C458 389 455 349 466 320Z" fill="var(--land-near)" opacity=".34"/>
@@ -113,10 +193,17 @@ export function mountLandscape(svgElement, { onSunDrag, onTreeSelect, onLeafSele
       <path d="M-12 600C98 644 198 652 281 653C369 654 408 640 478 647C600 661 733 634 823 592" fill="none" stroke="url(#${id}-shore)" stroke-width="3"/>
       <path d="M86 653C205 680 286 682 391 674C529 668 645 686 775 634" fill="none" stroke="#c0d1c4" stroke-width="1.1" opacity=".3"/>
       <path d="M154 670C258 688 316 687 389 684M520 680C608 681 667 666 722 649" fill="none" stroke="#ced9c8" stroke-width=".8" opacity=".14"/>
+      </g>
+      <g data-layer="mountain-right">
       <path d="M1322 567C1371 535 1404 503 1438 484C1475 466 1491 427 1519 424C1547 422 1570 455 1615 468V721C1557 703 1527 681 1491 670C1428 653 1367 612 1322 567Z" fill="url(#${id}-island)"/>
       <path d="M1518 427C1510 470 1483 509 1473 540C1461 572 1458 604 1471 637C1434 609 1404 583 1388 558C1444 514 1486 466 1518 427Z" fill="var(--leaf-light)" opacity=".14"/>
       <path d="M1325 572C1378 605 1421 636 1470 653C1524 673 1565 703 1611 710" fill="none" stroke="url(#${id}-shore)" stroke-width="3"/>
       <path d="M1382 627C1452 669 1515 700 1609 727" fill="none" stroke="#c0d1c4" stroke-width="1" opacity=".28"/>
+      </g>
+      <g data-layer="support">
+        <g data-support="left"><path d="M-70 638C90 609 255 610 410 624S702 627 840 644C689 675 535 666 392 675S93 664-70 651Z" fill="var(--land-mid)"/><path d="M-50 650C210 681 546 686 824 649" fill="none" stroke="var(--leaf-light)" stroke-width="2" opacity=".24"/></g>
+        <g data-support="right"><path d="M1322 687C1400 662 1518 668 1630 689V736C1507 731 1416 715 1322 687Z" fill="var(--land-mid)"/></g>
+      </g>
       <g data-layer="foreground">
       <path d="M-48 783C57 757 100 729 164 733C211 737 233 713 280 728C337 747 370 759 410 797C440 824 445 873 476 914C493 939 522 969 539 1028H-48Z" fill="url(#${id}-front)"/>
       <path d="M-30 783C76 749 118 742 165 744C219 746 239 728 275 738C326 750 365 773 405 802C352 787 313 781 271 785C227 783 192 770 153 780C91 792 35 800-30 818Z" fill="var(--land-mid)" opacity=".32"/>
@@ -134,22 +221,28 @@ export function mountLandscape(svgElement, { onSunDrag, onTreeSelect, onLeafSele
     <g data-role="sun-control" role="slider" tabindex="0" aria-label="拖动太阳或月亮改变时间" aria-valuemin="0" aria-valuemax="24"><circle r="76" fill="transparent"/><circle class="sun-affordance" r="69" fill="none" stroke="#f8ecc8" stroke-width="1.5"/><text class="sun-affordance" data-part="time-label" text-anchor="middle" y="104" font-size="15" fill="#edf2df" font-family="system-ui,sans-serif"></text></g>`;
 
   const layer = (name) => svgElement.querySelector(`[data-layer="${name}"]`);
-  const layers = Object.fromEntries(['stars','clouds','sun-visual','reflection','water','foreground','land-details','pines','boat','birds','hero','flowers','rain','trajectory','leaf'].map((name) => [name, layer(name)]));
+  const layers = Object.fromEntries(['stars','clouds','sun-visual','reflection','water','distant','mountain-left','mountain-right','mountain-extras','support','foreground','land-details','pines','boat','birds','hero','flowers','rain','trajectory','leaf'].map((name) => [name, layer(name)]));
   const sunControl = svgElement.querySelector('[data-role="sun-control"]');
   const stops = Object.fromEntries(['sky-top','sky-bottom','sea-top','sea-bottom'].map((name) => [name, svgElement.querySelector(`[data-stop="${name}"]`)]));
   let destroyed = false, current = null, drag = null, geometryKey = '', paletteKey = '', weatherKey = '', pathKey = '', compareKey = '', points = [], sunSpan = 1240;
+  let objectLayout = null, boatNodes = [];
   const disposers = [];
   const listen = (node, name, callback, options) => { node.addEventListener(name, callback, options); disposers.push(() => node.removeEventListener(name, callback, options)); };
 
-  function geometry(scene) {
+  function geometry(scene, objects) {
+    objectLayout = objects;
     const random = seeded(scene.seed), pineCount = Math.max(0, scene.trees - 1), pines = [];
     for (let i = 0; i < pineCount; i++) {
-      const side = random();
-      let x, y;
-      if (side < .73) { x = 44 + random() * 685; y = 511 + x*.09 + random()*35; }
-      else { x = 1400 + random()*235; y = 563+(x-1400)*.30+random()*27; }
-      const height = 16 + random()*29;
-      pines.push(`<path data-object="tree" data-select="tree" d="${pine(x,y,height)}" fill="var(--land-near)" opacity="${fixed(.67+random()*.3)}"/>`);
+      const left = random() < .73, side = left ? 'left' : 'right';
+      const highGround = scene.mountains === 2 || (scene.mountains === 1 && left);
+      const x = left ? 44 + random() * 685 : 1400 + random() * 180;
+      const y = highGround ? (left ? 511 + x * .09 + random() * 35 : 563 + (x-1400) * .30 + random() * 27) :
+        (left ? 622 + Math.sin(x/730*Math.PI) * 15 + random() * 10 : 681 + (x-1400) * .12 + random() * 8);
+      const height = 16 + random() * 29;
+      const mountain = objects.mountains.find(item => item.template === side);
+      const transform = highGround && mountain ? mountain.transform : 'translate(' + fixed(objects.coastShifts[side]) + ' 0)';
+      pines.push('<path data-object="tree" data-select="tree" transform="' + transform + '" d="' + pine(x,y,height) +
+        '" fill="var(--land-near)" opacity="' + fixed(.67+random()*.3) + '"/>');
     }
     layers.pines.innerHTML = pines.join('');
     const stars = [];
@@ -184,7 +277,20 @@ export function mountLandscape(svgElement, { onSunDrag, onTreeSelect, onLeafSele
       flowers.push(`<g data-object="flower"><path d="M${fixed(x-1)} ${fixed(y+8)}q3-4 1-8m-1 4q-4-4-4-1" fill="none" stroke="var(--leaf)" stroke-width=".8" opacity=".8"/><path d="M${fixed(x-r)} ${fixed(y)}q${fixed(-r*1.8)} ${fixed(-r*1.8)} 0 ${fixed(-r*2)}q${fixed(r*1.1)} ${fixed(-r*1.9)} ${fixed(r*2)} 0q${fixed(r*2)} ${fixed(r*.3)} ${fixed(r)} ${fixed(r*1.8)}q0 ${fixed(r*2)} ${fixed(-r*2)} ${fixed(r*.2)}Z" fill="var(--leaf-light)" opacity=".85"/></g>`);
     }
     layers.flowers.innerHTML = flowers.join('');
-    layers.boat.innerHTML = '<path d="M-42 25q44-4 86 0m-67 7h48m-35 5h21" fill="none" stroke="#d2dfd1" stroke-width=".9" opacity=".24"/><path d="M-27 11Q-2 16 28 10L18 20Q1 24-16 20Z" fill="#304e52"/><path d="M-23 12Q2 17 24 12" fill="none" stroke="#b3bea6" stroke-width="1.3"/><path d="M1-53L0 13" stroke="#d5d1b7" stroke-width="1.4"/><path d="M-3-49Q-8-21-28 8L-3 6Z" fill="#f4e9cc"/><path d="M5-39Q20-15 25 7L5 5Z" fill="#d8dfca"/><path d="M-5-36L-22 5M8-27L20 3" fill="none" stroke="#fff9e5" stroke-opacity=".4" stroke-width=".8"/>';
+    const boatMarkup = '<path d="M-42 25q44-4 86 0m-67 7h48m-35 5h21" fill="none" stroke="#d2dfd1" stroke-width=".9" opacity=".24"/><path d="M-27 11Q-2 16 28 10L18 20Q1 24-16 20Z" fill="#304e52"/><path d="M-23 12Q2 17 24 12" fill="none" stroke="#b3bea6" stroke-width="1.3"/><path d="M1-53L0 13" stroke="#d5d1b7" stroke-width="1.4"/><path d="M-3-49Q-8-21-28 8L-3 6Z" fill="#f4e9cc"/><path d="M5-39Q20-15 25 7L5 5Z" fill="#d8dfca"/><path d="M-5-36L-22 5M8-27L20 3" fill="none" stroke="#fff9e5" stroke-opacity=".4" stroke-width=".8"/>';
+    layers.boat.innerHTML = objects.boats.map(item => '<g data-object="boat" data-boat-id="' + item.id + '">' + boatMarkup + '</g>').join('');
+    boatNodes = Array.from(layers.boat.querySelectorAll('[data-object="boat"]'));
+    layers.distant.style.display = scene.mountains ? '' : 'none';
+    for (const side of ['left','right']) {
+      const node = layers['mountain-' + side], item = objects.mountains.find(mountain => mountain.template === side);
+      node.style.display = item ? '' : 'none';
+      if (item) { node.setAttribute('data-object','mountain');node.setAttribute('data-mountain-id',String(item.id));node.setAttribute('transform',item.transform); }
+      else { node.removeAttribute('data-object');node.removeAttribute('data-mountain-id'); }
+    }
+    layers['mountain-extras'].innerHTML = objects.mountains.filter(item => item.template === 'generated').map(item => generatedMountain(item,id)).join('');
+    layers.support.style.display = scene.mountains === 2 ? 'none' : '';
+    for (const side of ['left','right']) layers.support.querySelector('[data-support="' + side + '"]').setAttribute('transform','translate(' + fixed(objects.coastShifts[side]) + ' 0)');
+
     hero(scene);
   }
 
@@ -254,8 +360,8 @@ export function mountLandscape(svgElement, { onSunDrag, onTreeSelect, onLeafSele
     sunSpan = sunRight-sunLeft;
     current = validateScene(scene);
     phase = Number.isFinite(phase) ? clamp(phase) : 0;
-    const nextGeometry = [current.seed,current.trees,current.flowers,current.branchAngle,current.branchDepth].join(':');
-    if (nextGeometry !== geometryKey) { geometry(current);geometryKey=nextGeometry; }
+    const nextGeometry = [current.seed,current.trees,current.flowers,current.branchAngle,current.branchDepth,current.boats,current.mountains,fixed(visibleLeft),fixed(visibleRight),fixed(visibleTop),fixed(visibleBottom)].join(':');
+    if (nextGeometry !== geometryKey) { geometry(current,layoutSceneObjects(current,{left:visibleLeft,right:visibleRight,top:visibleTop,bottom:visibleBottom}));geometryKey=nextGeometry; }
     const nextWeather = [current.seed,current.rain,current.wind].join(':');
     if (nextWeather !== weatherKey) { weather(current);weatherKey=nextWeather; }
     const nextPalette = [current.hour,current.rain].join(':');
@@ -290,8 +396,11 @@ export function mountLandscape(svgElement, { onSunDrag, onTreeSelect, onLeafSele
     layers.clouds.setAttribute('transform',`translate(${fixed(Math.sin(phase*TAU)*current.wind*20)} 0)`);
     layers.birds.setAttribute('transform',`translate(${fixed(Math.sin(phase*TAU)*current.wind*15)} ${fixed(Math.cos(phase*TAU)*current.wind*3)})`);
     layers.rain.setAttribute('transform',`translate(${fixed(-phase*current.wind*24)} ${fixed(phase*55)})`);
-    layers.boat.style.display=current.boat?'':'none';
-    layers.boat.setAttribute('transform',`translate(970 ${fixed(708+Math.sin(phase*TAU)*current.wind*4)}) rotate(${fixed(Math.sin(phase*TAU)*current.wind*4)}) scale(.82)`);
+    for (const [index,node] of boatNodes.entries()) {
+      const item = objectLayout.boats[index], motion = Math.sin(phase*TAU+item.phase) * current.wind;
+      node.setAttribute('transform','translate(' + item.x + ' ' + fixed(item.y+motion*4*item.scale/.82) +
+        ') rotate(' + fixed(motion*4) + ') scale(' + item.scale + ')');
+    }
     const foregroundShift=`translate(${fixed(foregroundX-150)} 0)`;
     layers.foreground.setAttribute('transform',foregroundShift);
     layers.flowers.setAttribute('transform',foregroundShift);
@@ -302,11 +411,14 @@ export function mountLandscape(svgElement, { onSunDrag, onTreeSelect, onLeafSele
     if(nextPath!==pathKey){points=leafPath(current,{samples:31});layers.trajectory.querySelector('[data-path="current"]').setAttribute('d',pointsPath(points));pathKey=nextPath;}
     const p=phasePoint(points,phase);
     layers.leaf.setAttribute('transform',`translate(${fixed(foregroundX+p.x*WIDTH*FOREGROUND_SCALE)} ${fixed(foregroundY+p.y*HEIGHT*FOREGROUND_SCALE)}) rotate(${fixed(p.rotation)}) scale(.65)`);
-    layers.trajectory.style.display=showTrajectory?'':'none';
+    layers.leaf.style.display=current.trees?'':'none';
+    layers.trajectory.style.display=showTrajectory&&current.trees?'':'none';
     const dot=layers.trajectory.querySelector('[data-part="phase-dot"]');dot.setAttribute('cx',String(p.x*WIDTH));dot.setAttribute('cy',String(p.y*HEIGHT));
     const comparePath=layers.trajectory.querySelector('[data-path="compare"]');
     if(compareScene){const comparison=validateScene(compareScene),key=[comparison.seed,comparison.wind,comparison.rain].join(':');if(key!==compareKey){comparePath.setAttribute('d',pointsPath(leafPath(comparison,{samples:31})));compareKey=key;}comparePath.style.display='';}
     else comparePath.style.display='none';
+    svgElement.setAttribute('data-boats',String(current.boats));
+    svgElement.setAttribute('data-mountains',String(current.mountains));
     for(const [name,value] of Object.entries({hour:current.hour,trees:current.trees,rain:current.rain,wind:current.wind,'branch-angle':current.branchAngle,'branch-depth':current.branchDepth,flowers:current.flowers,phase,'leaf-x':p.x,'leaf-y':p.y,night:moon}))svgElement.setAttribute('data-'+name,String(value));
   }
 
