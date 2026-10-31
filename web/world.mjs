@@ -7,7 +7,7 @@ const esc=value=>String(value??'').replace(/[&<>"']/g,char=>({'&':'&amp;','<':'&
 if(location.hash.startsWith('#doc='))location.replace('/legacy/app/'+location.search+location.hash);
 const STORAGE='teamlink-landscape-v1';
 let scene=createScene(),room=null,busy=false,pollTimer=null,pollDelay=1400,polling=false,localHistory=[],latestChanges=[],lastReply='',lastRequest=null;
-let selected=null,editBefore=null,leafCompare=null,phase=0,playing=true,lastFrame=performance.now(),toastTimer,hideOpening,stageVisible=true,introOpen=false;
+let selected=null,editBefore=null,leafCompare=null,phase=0,playing=true,lastFrame=performance.now(),toastTimer,hideOpening,stageVisible=true;
 let codePanel=null,codeBefore=null,codeDraft=false,roomConnection=null,connecting=true,shareUnavailable=false,shareError='',inviteCache='',expiryTimer;
 const reduced=matchMedia('(prefers-reduced-motion: reduce)').matches;if(reduced)playing=false;
 try{const raw=localStorage.getItem(STORAGE);if(raw)scene=validateScene(JSON.parse(raw));}catch{}
@@ -35,7 +35,7 @@ function render(){renderer.render(scene,{phase,showTrajectory:selected==='leaf',
 function inspector(kind){selected=kind;$('#inspector').hidden=!kind;$$('[data-inspector]').forEach(node=>node.hidden=node.dataset.inspector!==kind);$('#inspector-title').textContent=kind==='tree'?'这棵树怎样生长':kind==='leaf'?'把落叶的过程摊开看':'太阳与时间';if(kind==='leaf')leafCompare=scene;render();quietOpening();}
 const renderer=mountLandscape($('#landscape'),{onSunDrag(hour,dragPhase){if(busy||connecting||codeDraft)return;if(dragPhase==='start')editBefore=scene;scene=updateScene(scene,{hour});render();quietOpening();if(dragPhase==='end')finishDirect({hour});},onTreeSelect:()=>inspector('tree'),onLeafSelect:()=>inspector('leaf')});
 const previewRenderer=mountLandscape($('#code-preview-landscape'));
-function animate(now){const delta=Math.min((now-lastFrame)/1000,.1);lastFrame=now;if(playing&&stageVisible&&!introOpen&&!document.hidden){phase=(phase+delta/7)%1;renderer.render(scene,{phase,showTrajectory:selected==='leaf',compareScene:leafCompare});if(selected==='leaf'&&$('#leaf-time')!==document.activeElement)$('#leaf-time').value=String(phase);}requestAnimationFrame(animate);}
+function animate(now){const delta=Math.min((now-lastFrame)/1000,.1);lastFrame=now;if(playing&&stageVisible&&!document.hidden){phase=(phase+delta/7)%1;renderer.render(scene,{phase,showTrajectory:selected==='leaf',compareScene:leafCompare});if(selected==='leaf'&&$('#leaf-time')!==document.activeElement)$('#leaf-time').value=String(phase);}requestAnimationFrame(animate);}
 function setConnection(text,connected=false){$('#connection').textContent=text;$('#connection').classList.toggle('connected',connected);}
 function renderMessages(){
  const messages=room?.messages??[];const last=messages.at(-1);
@@ -163,10 +163,21 @@ document.addEventListener('keydown',event=>{if(event.key==='Escape'&&!document.q
 new ResizeObserver(()=>render()).observe(stage);
 new IntersectionObserver(entries=>{stageVisible=entries[0]?.isIntersecting??true;if(stageVisible){lastFrame=performance.now();render();}},{rootMargin:'100px'}).observe(stage);
 
-let introFocus;
-$('#watch-intro').addEventListener('click',()=>{introFocus=document.activeElement;introOpen=true;$('#intro-dialog').showModal();const video=$('#intro-video');if(video.error)video.load();video.play().catch(()=>{$('#intro-video-status').textContent=video.error?'视频暂未加载成功，请稍后重新打开。':'点击影片中的播放按钮观看。';});});
-$('#close-intro').addEventListener('click',()=>$('#intro-dialog').close());
-$('#intro-dialog').addEventListener('close',()=>{$('#intro-video').pause();introOpen=false;lastFrame=performance.now();introFocus?.focus();});
-$('#intro-video').addEventListener('playing',()=>{$('#intro-video-status').textContent='真实操作节选 · 中文字幕 · 原创配乐';});
-$('#intro-video').addEventListener('error',()=>{$('#intro-video-status').textContent='视频暂未加载成功，请稍后重新打开。';});
-$('#intro-start').addEventListener('click',()=>{introFocus=null;$('#intro-dialog').close();scrollToElement('experience');$('#instruction').focus({preventScroll:true});});
+const introVideo=$('#intro-video');
+introVideo.defaultMuted=true;introVideo.muted=true;
+let introVisible=false,introUserPaused=false,introSystemPause=false,introPlayRequest=null;
+function introEligible(){return introVisible&&!document.hidden&&!document.body.classList.contains('controller')&&!document.body.classList.contains('focus-mode');}
+function introCaption(){if(introVideo.error){$('#intro-video-status').textContent='视频暂未加载成功，可以使用播放控件重试。';return;}$('#intro-video-status').textContent=introVideo.paused?'已暂停 · 可使用播放控件继续':introVideo.muted?'静音自动播放 · 可直接开启声音':'正在播放 · 中文字幕与原创配乐';}
+function updateIntroPlayback(){
+ if(!introEligible()){if(!introVideo.paused){introSystemPause=true;introVideo.pause();}return;}
+ if(introUserPaused||!introVideo.paused||introPlayRequest)return;
+ introPlayRequest=introVideo.play().catch(()=>{$('#intro-video-status').textContent=introVideo.error?'视频暂未加载成功，可以使用播放控件重试。':'影片已直接展示，点击播放控件即可继续。';}).finally(()=>{introPlayRequest=null;if(!introEligible()&&!introVideo.paused){introSystemPause=true;introVideo.pause();}});
+}
+introVideo.addEventListener('play',()=>{introUserPaused=false;introCaption();});
+introVideo.addEventListener('playing',introCaption);
+introVideo.addEventListener('pause',()=>{if(introSystemPause)introSystemPause=false;else if(introEligible())introUserPaused=true;introCaption();});
+introVideo.addEventListener('volumechange',introCaption);
+introVideo.addEventListener('error',introCaption);
+document.addEventListener('visibilitychange',updateIntroPlayback);
+new IntersectionObserver(entries=>{introVisible=(entries[0]?.intersectionRatio??0)>=.15;updateIntroPlayback();},{threshold:[0,.15]}).observe(introVideo);
+if(document.body.classList.contains('controller')){introVideo.autoplay=false;introVideo.removeAttribute('autoplay');updateIntroPlayback();}
