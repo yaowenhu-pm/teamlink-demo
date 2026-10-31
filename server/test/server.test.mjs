@@ -99,7 +99,7 @@ test('server and backup CLI start through deployment symlinks', { timeout: 10000
     });
     assert.equal((await once(backupProcess, 'exit'))[0], 0);
     const snapshot = new DatabaseSync(destination, { readOnly: true });
-    assert.equal(snapshot.prepare('SELECT COUNT(*) AS count FROM _teamlink_migrations').get().count, 1); snapshot.close();
+    assert.equal(snapshot.prepare('SELECT COUNT(*) AS count FROM _teamlink_migrations').get().count, 2); snapshot.close();
   } finally { child?.kill('SIGKILL'); await f.close(); }
 });
 
@@ -109,9 +109,9 @@ test('startup applies real Drizzle SQL once, rejects drift and rolls back a fail
   await cp(resolve(ROOT, 'drizzle'), migrations, { recursive: true });
   try {
     let db = new SqliteD1(databasePath, { migrationsDir: migrations });
-    assert.equal(db.ready(), true); assert.equal(db.database.prepare('SELECT COUNT(*) AS count FROM _teamlink_migrations').get().count, 1);
+    assert.equal(db.ready(), true); assert.equal(db.database.prepare('SELECT COUNT(*) AS count FROM _teamlink_migrations').get().count, 2);
     db.close(); db = new SqliteD1(databasePath, { migrationsDir: migrations });
-    assert.equal(db.database.prepare('SELECT COUNT(*) AS count FROM _teamlink_migrations').get().count, 1); db.close();
+    assert.equal(db.database.prepare('SELECT COUNT(*) AS count FROM _teamlink_migrations').get().count, 2); db.close();
     const bad = resolve(migrations, '0001_fixture_invalid.sql');
     await writeFile(bad, 'CREATE TABLE fixture_partial(id INTEGER); INVALID SQL;');
     assert.throws(() => new SqliteD1(databasePath, { migrationsDir: migrations }));
@@ -182,6 +182,47 @@ test('AI pending nonce and global budgets persist before the external wait; repl
   } finally { release?.({ supported: false, patch: {}, reply: 'fixture cleanup' }); await f.close(); }
 });
 
+test('HTTP rooms exceed both old caps and retain rolled-out direct and AI receipts across restart', async () => {
+  let calls = 0;
+  const f = await fixture({interpret: async () => { calls++; return {supported: true, patch: {rain: 0.4}, reply: 'fixture AI applied'}; }});
+  try {
+    const room = await f.created(), route = '/api/rooms/' + room.id;
+    const send = body => f.request(route, {method: 'POST', token: room.token, body});
+    const permitNext = () => f.application.db.database.prepare('UPDATE rooms SET next_message_at = 0 WHERE id = ?').run(room.id);
+    const oldPatch = {nonce: 'http-before-rolling', expectedRevision: 0,
+      patch: {boats: 8, placements: [{id: 'boat:7', x: 0.4, y: 0.7}]}};
+    let response = await send(oldPatch), state = await response.json();
+    assert.equal(response.status, 200); assert.equal(state.receipt.revision, 1);
+    const oldAi = {nonce: 'http-ai-before-rolling', expectedRevision: 1, text: '下点雨'};
+    for (let index = 0; index < 25; index++) {
+      permitNext(); response = await send(index ? {nonce: 'http-ai-' + index, expectedRevision: state.revision, text: '下点雨'} : oldAi);
+      state = await response.json(); assert.equal(response.status, 200);
+    }
+    assert.equal(calls, 25); assert.equal(state.revision, 51);
+    for (let index = 0; index < 120; index++) {
+      permitNext(); response = await send({nonce: 'http-rolling-' + index, expectedRevision: state.revision, patch: {boats: 0, wind: index % 2}});
+      state = await response.json(); assert.equal(response.status, 200);
+    }
+    assert.equal(state.revision, 171); assert.equal(state.messages.length, 64);
+    assert.equal(state.messages.some(message => [oldAi.nonce, oldPatch.nonce].includes(message.nonce)), false);
+    assert.equal(JSON.parse(f.application.db.database.prepare('SELECT history_json FROM rooms WHERE id = ?').get(room.id).history_json).length, 15);
+    await f.restart();
+    const database = f.application.db.database, before = database.prepare('SELECT * FROM rooms WHERE id = ?').get(room.id);
+    assert.equal(database.prepare('SELECT COUNT(*) AS count FROM operation_receipts WHERE room_id = ?').get(room.id).count, 146);
+    for (const [body, kind, revision] of [[oldPatch, 'patch', 1], [oldAi, 'instruction', 3]]) {
+      response = await send(body); const replayed = await response.json();
+      assert.equal(response.status, 200); assert.equal(replayed.revision, 171); assert.deepEqual(replayed.scene, state.scene);
+      assert.equal(replayed.receipt.nonce, body.nonce); assert.equal(replayed.receipt.kind, kind);
+      assert.equal(replayed.receipt.revision, revision); assert.equal(replayed.receipt.replayed, true);
+      assert.equal(replayed.receipt._requestHash, undefined);
+    }
+    response = await send({...oldAi, text: '改成另一条消息'});
+    assert.equal(response.status, 409); assert.equal((await response.json()).code, 'NONCE_REUSED');
+    assert.equal(calls, 25); assert.equal(database.prepare('SELECT calls FROM ai_usage').get().calls, 25);
+    assert.deepEqual(database.prepare('SELECT * FROM rooms WHERE id = ?').get(room.id), before);
+  } finally { await f.close(); }
+});
+
 test('Origin is the configured public origin; forged CF/X-Real-IP cannot bypass direct creation limits', async () => {
   const f = await fixture();
   try {
@@ -196,7 +237,7 @@ test('Origin is the configured public origin; forged CF/X-Real-IP cannot bypass 
   } finally { await f.close(); }
 });
 
-test('daily/room AI limits and failed provider replays retain the original protocol through SQLite HTTP', async () => {
+test('the daily AI limit and failed provider replays retain the protocol without a per-room cap', async () => {
   let calls = 0;
   const f = await fixture({ interpret: async () => { calls++; throw new Error('fixture provider unavailable'); } });
   try {
@@ -209,15 +250,13 @@ test('daily/room AI limits and failed provider replays retain the original proto
     assert.equal(sql.prepare('SELECT ai_calls FROM rooms WHERE id = ?').get(room.id).ai_calls, 0);
     sql.prepare('UPDATE ai_usage SET calls = 0 WHERE day = ?').run(today);
     sql.prepare('UPDATE rooms SET ai_calls = 20, next_message_at = 0 WHERE id = ?').run(room.id);
-    response = await post('room-budget-exhausted', result.current.revision); result = await response.json();
-    assert.equal(response.status, 429); assert.equal(result.code, 'ROOM_AI_LIMIT'); assert.equal(calls, 0);
-    sql.prepare('UPDATE rooms SET ai_calls = 0, next_message_at = 0 WHERE id = ?').run(room.id);
     const revision = result.current.revision;
     response = await post('provider-failed', revision); result = await response.json();
     assert.equal(response.status, 503); assert.equal(result.code, 'INTERPRETATION_UNAVAILABLE'); assert.equal(calls, 1);
     assert.equal(result.current.scene.rain, 0); assert.equal(result.current.messages.at(-1).kind, 'failed');
     assert.equal((await post('provider-failed', revision)).status, 200); assert.equal(calls, 1);
     assert.equal(sql.prepare('SELECT calls FROM ai_usage WHERE day = ?').get(today).calls, 1);
+    assert.equal(sql.prepare('SELECT ai_calls FROM rooms WHERE id = ?').get(room.id).ai_calls, 21);
   } finally { await f.close(); }
 });
 
@@ -238,6 +277,30 @@ test('graceful close waits for an AI handler even after its browser connection d
     const row = snapshot.prepare('SELECT scene_json, busy_nonce FROM rooms WHERE id = ?').get(room.id);
     assert.equal(JSON.parse(row.scene_json).trees, 3); assert.equal(row.busy_nonce, null); snapshot.close();
   } finally { release?.({ supported: false, patch: {}, reply: 'fixture cleanup' }); await f.close(); }
+});
+
+test('readiness requires durable nonce receipts and every atomicity/cleanup trigger', async t => {
+  for (const [type, name] of [
+    ['TABLE', 'operation_receipts'],
+    ['TRIGGER', 'rooms_receipts_insert'],
+    ['TRIGGER', 'rooms_receipts_update'],
+    ['TRIGGER', 'operation_receipts_guard_update'],
+    ['TRIGGER', 'rooms_receipts_delete'],
+  ]) {
+    await t.test(name, async () => {
+      const f = await fixture();
+      try {
+        assert.equal(f.application.db.ready(), true);
+        assert.equal((await f.request('/api/ready')).status, 200);
+        f.application.db.database.exec(`DROP ${type} ${name}`);
+        assert.equal(f.application.db.ready(), false);
+        const response = await f.request('/api/ready');
+        assert.equal(response.status, 503);
+        assert.equal((await response.json()).ok, false);
+        assert.equal((await f.request('/api/health')).status, 200, 'liveness is distinct from schema readiness');
+      } finally { await f.close(); }
+    });
+  }
 });
 
 test('readiness reports a SQLite failure without exposing its path or secrets', async () => {

@@ -53,7 +53,7 @@ export function mountLandscapeMusic(stage,{introVideo}={}){
  const document=stage.ownerDocument,storageKey='teamlink-music-enabled-v1';
  let enabled=true;try{enabled=localStorage.getItem(storageKey)!=='false';}catch{}
  const audio=document.createElement('audio');audio.id='landscape-music';audio.src='/media/teamlink-original-score.m4a';audio.preload='none';audio.loop=true;audio.hidden=true;audio.volume=.7;stage.append(audio);
- const button=document.createElement('button');button.type='button';button.className='music-toggle';button.textContent='♫ 开音乐';
+ const button=document.createElement('button');button.type='button';button.className='music-toggle';button.textContent='♫ 开音乐';button.setAttribute('aria-keyshortcuts','M');
  stage.querySelector('.canvas-tools').append(button);
  const controller=createMusicController(audio,{introVideo,enabled,isHidden:()=>document.hidden,
   savePreference(value){try{localStorage.setItem(storageKey,String(value));}catch{}},
@@ -61,7 +61,7 @@ export function mountLandscapeMusic(stage,{introVideo}={}){
    const audible=state.playing||state.videoPlaying;
    button.textContent=state.blocked?'♫ 重试':audible?'♫ 音乐开':state.enabled?'♫ 开音乐':'♫ 音乐关';
    button.setAttribute('aria-label',audible?'关闭背景音乐':'开启背景音乐');button.setAttribute('aria-pressed',String(audible));
-   button.title=state.blocked?'音乐暂未播放，点击重试':'原版配乐 · 全屏继续播放';
+   button.title=state.blocked?'音乐暂未播放，点击重试（M）':'原版配乐 · 全屏继续播放（M）';
    stage.dataset.musicState=state.blocked?'blocked':state.playing?'playing':state.videoPlaying?'video':state.enabled?'ready':'off';
   }
  });

@@ -70,7 +70,8 @@ export class SqliteD1 {
   ready() {
     if (this.closed) return false;
     try {
-      return this.database.prepare("SELECT COUNT(*) AS count FROM sqlite_schema WHERE type = 'table' AND name IN ('rooms', 'ai_usage', '_teamlink_migrations')").get().count === 3 &&
+      return this.database.prepare("SELECT COUNT(*) AS count FROM sqlite_schema WHERE type = 'table' AND name IN ('rooms', 'ai_usage', '_teamlink_migrations', 'operation_receipts')").get().count === 4 &&
+        this.database.prepare("SELECT COUNT(*) AS count FROM sqlite_schema WHERE type = 'trigger' AND ((tbl_name = 'rooms' AND name IN ('rooms_receipts_insert', 'rooms_receipts_update', 'rooms_receipts_delete')) OR (tbl_name = 'operation_receipts' AND name = 'operation_receipts_guard_update'))").get().count === 4 &&
         this.database.prepare('SELECT 1 AS ok').get().ok === 1;
     } catch { return false; }
   }

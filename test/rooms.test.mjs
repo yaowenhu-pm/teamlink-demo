@@ -1,14 +1,20 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {DatabaseSync} from 'node:sqlite';
+import {readFileSync, readdirSync} from 'node:fs';
+import {createHash} from 'node:crypto';
 import {handleRooms, ROOM_LIMITS} from '../worker/rooms.mjs';
 import {createScene, updateScene, moveSceneObject, duplicateSceneObject, removeSceneObject, leafPath} from '../web/scene-model.mjs';
 
 // Use real SQLite to execute production SQL; only the asynchronous D1 call shape is adapted.
 class SqliteD1 {
-  constructor() {
+  constructor({migrate = true} = {}) {
     this.database = new DatabaseSync(':memory:'); this.queries = [];
-    this.database.exec('CREATE TABLE rooms (id TEXT PRIMARY KEY, token_hash TEXT NOT NULL, revision INTEGER NOT NULL DEFAULT 0, scene_json TEXT NOT NULL, messages_json TEXT NOT NULL DEFAULT \'[]\', history_json TEXT NOT NULL DEFAULT \'[]\', expires_at INTEGER NOT NULL, next_message_at INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL, creator_ip_hash TEXT NOT NULL, ai_calls INTEGER NOT NULL DEFAULT 0, busy_nonce TEXT, busy_until INTEGER NOT NULL DEFAULT 0); CREATE INDEX rooms_expiry_idx ON rooms(expires_at); CREATE INDEX rooms_creator_hour_idx ON rooms(creator_ip_hash, created_at); CREATE TABLE ai_usage (day TEXT PRIMARY KEY, calls INTEGER NOT NULL DEFAULT 0);');
+    this.database.exec('PRAGMA foreign_keys = ON');
+    const directory = new URL('../drizzle/', import.meta.url);
+    for (const name of readdirSync(directory).filter(name => name.endsWith('.sql')).sort()) {
+      if (migrate || name.startsWith('0000_')) this.database.exec(readFileSync(new URL(name, directory), 'utf8'));
+    }
   }
   prepare(sql) {
     this.queries.push(sql);
@@ -18,6 +24,7 @@ class SqliteD1 {
     })};
   }
   row(id) { return this.database.prepare('SELECT * FROM rooms WHERE id = ?').get(id); }
+  receipt(id, nonce) { return this.database.prepare('SELECT * FROM operation_receipts WHERE room_id = ? AND nonce = ?').get(id, nonce); }
   calls() { return this.database.prepare('SELECT SUM(calls) AS total FROM ai_usage').get().total ?? 0; }
   close() { this.database.close(); }
 }
@@ -231,7 +238,7 @@ test('the unchanged 8KB protocol accepts a maximum placement scene with forty no
   } finally { env.DB.close(); }
 });
 
-test('creation rates, active room cap, command cap and room expiry are enforced by persisted state', async () => {
+test('creation rates, active room cap and room expiry are enforced by persisted state', async () => {
   const env = environment();
   try {
     let room;
@@ -241,9 +248,6 @@ test('creation rates, active room cap, command cap and room expiry are enforced 
     env.DB.database.prepare('UPDATE rooms SET expires_at = ? WHERE id = ?').run(Date.now() - 1, room.id);
     assert.equal((await handleRooms(request(route(room), {token: room.token}), env)).status, 410);
     const valid = await created(env, {ip: '192.0.2.3'});
-    const full = Array.from({length: 64}, (_, index) => ({nonce: 'done-' + index}));
-    env.DB.database.prepare('UPDATE rooms SET messages_json = ? WHERE id = ?').run(JSON.stringify(full), valid.id);
-    assert.equal((await post(env, valid, {nonce: 'new', expectedRevision: 0, patch: {wind: 0.5}})).status, 429);
     const insert = env.DB.database.prepare('INSERT INTO rooms (id,token_hash,scene_json,expires_at,created_at,creator_ip_hash) VALUES (?,?,?,?,?,?)');
     for (let index = 0; index < 500; index++) insert.run('seed-' + index, '0'.repeat(64), JSON.stringify(createScene()), Date.now() + 60000, Date.now(), 'seed');
     assert.equal((await handleRooms(request('/api/rooms', {method: 'POST', ip: '192.0.2.99'}), env)).status, 429);
@@ -253,7 +257,11 @@ test('creation rates, active room cap, command cap and room expiry are enforced 
 test('AI reservation is durable: pending replay and busy writes never repeat the provider call', async () => {
   const env = environment(); let release, started;
   const began = new Promise(resolve => { started = resolve; }); let calls = 0;
-  const interpret = () => { calls++; started(); return new Promise(resolve => { release = resolve; }); };
+  const interpret = () => {
+    assert.equal(env.DB.database.prepare('SELECT kind FROM operation_receipts WHERE nonce = ?').get('ai-once').kind, 'pending');
+    assert.equal(env.DB.calls(), 1);
+    calls++; started(); return new Promise(resolve => { release = resolve; });
+  };
   try {
     const room = await created(env), body = {nonce: 'ai-once', expectedRevision: 0, text: '加一些树'};
     const pending = post(env, room, body, {interpret, mode: 'ai'});
@@ -293,7 +301,41 @@ test('AI failures and invalid model patches leave a durable non-retryable nonce 
   });
 });
 
-test('daily and room AI budgets reject before a provider call; direct scene editing stays available', async () => {
+test('an AI completion racing a replay never mixes pending and terminal database snapshots', async () => {
+  const env = environment(); let release, started, calls = 0;
+  const began = new Promise(resolve => { started = resolve; });
+  const interpret = () => { calls++; started(); return new Promise(resolve => { release = resolve; }); };
+  try {
+    const room = await created(env), body = {nonce: 'completion-race', expectedRevision: 0, text: '把树改成2棵'};
+    const pending = post(env, room, body, {interpret}); await began;
+    const prepare = env.DB.prepare.bind(env.DB); let intercepted = false;
+    env.DB.prepare = sql => {
+      const statement = prepare(sql);
+      return {bind: (...parameters) => {
+        const bound = statement.bind(...parameters);
+        return {...bound, first: async () => {
+          const row = await bound.first();
+          if (!intercepted && sql.includes('operation_receipts') && row) {
+            intercepted = true;
+            release({supported: true, patch: {trees: 2}, reply: 'fixture completed during replay read'});
+            assert.equal((await pending).status, 200);
+          }
+          return row;
+        }};
+      }};
+    };
+    const response = await post(env, room, body, {interpret}), replayed = await response.json();
+    assert.equal(intercepted, true);
+    const message = replayed.messages.find(message => message.nonce === body.nonce);
+    assert.equal(replayed.receipt.kind, message.kind);
+    assert.equal(response.status, message.kind === 'pending' ? 202 : 200);
+    assert.equal(replayed.scene.trees, message.kind === 'pending' ? 40 : 2);
+    const current = await (await handleRooms(request(route(room), {token: room.token}), env)).json();
+    assert.equal(current.scene.trees, 2); assert.equal(calls, 1); assert.equal(env.DB.calls(), 1);
+  } finally { env.DB.close(); }
+});
+
+test('the daily AI budget rejects before a provider call; direct scene editing stays available', async () => {
   await clock(async advance => {
     const env = environment(); let calls = 0;
     const interpret = async () => { calls++; return {supported: true, patch: {rain: 1}, reply: '下雨了'}; };
@@ -309,8 +351,10 @@ test('daily and room AI budgets reject before a provider call; direct scene edit
       assert.equal(direct.status, 200); assert.equal((await direct.json()).scene.rain, 0.8); assert.equal(calls, 0);
       advance();
       env.DB.database.prepare('UPDATE rooms SET ai_calls = 20 WHERE id = ?').run(room.id);
-      const blocked = await post(env, room, {nonce: 'room-limit', expectedRevision: 3, text: '下雨'}, {interpret});
-      assert.equal(blocked.status, 429); assert.equal((await blocked.json()).code, 'ROOM_AI_LIMIT'); assert.equal(calls, 0);
+      env.DB.database.prepare('UPDATE ai_usage SET calls = 0').run();
+      const allowed = await post(env, room, {nonce: 'over-old-room-limit', expectedRevision: 3, text: '下雨'}, {interpret});
+      assert.equal(allowed.status, 200); assert.equal((await allowed.json()).scene.rain, 1); assert.equal(calls, 1);
+      assert.equal(env.DB.row(room.id).ai_calls, 21);
     } finally { env.DB.close(); }
   });
 });
@@ -369,6 +413,9 @@ test('two writes from the same scene revision have one winner and one explicit c
     assert.equal(conflict.code, 'REVISION_CONFLICT'); assert.equal(conflict.current.scene.trees, winner.scene.trees);
     const row = env.DB.row(room.id);
     assert.equal(row.revision, 1); assert.equal(JSON.parse(row.messages_json).length, 1);
+    assert.equal(env.DB.database.prepare('SELECT COUNT(*) AS count FROM operation_receipts WHERE room_id = ?').get(room.id).count, 1);
+    const loser = winner.receipt.nonce === 'concurrent-a' ? 'concurrent-b' : 'concurrent-a';
+    assert.equal(env.DB.receipt(room.id, loser), undefined);
   } finally { env.DB.close(); }
 });
 
@@ -387,4 +434,202 @@ test('concurrent rooms cannot spend the final daily model allowance twice', asyn
     const blocked = await responses.find(response => response.status === 429).json();
     assert.equal(blocked.code, 'DAILY_AI_LIMIT');
   } finally { env.DB.close(); }
+});
+
+test('a room accepts over 100 operations while old patch and undo receipts survive its rolling log', async () => {
+  await clock(async advance => {
+    const env = environment();
+    try {
+      const room = await created(env, {body: {scene: updateScene(createScene(), {boats: 8})}});
+      const oldPatch = {nonce: 'place-last-boat', expectedRevision: 0, patch: {placements: [{id: 'boat:7', x: 0.4, y: 0.6}]}};
+      let response = await post(env, room, oldPatch), state = await response.json();
+      assert.equal(response.status, 200); assert.equal(state.receipt.revision, 1); assert.equal(state.receipt.replayed, false); advance();
+      const oldUndo = {nonce: 'undo-old-placement', expectedRevision: 1};
+      response = await post(env, room, oldUndo, undefined, '/undo'); state = await response.json();
+      assert.equal(response.status, 200); assert.equal(state.receipt.revision, 2); advance();
+      for (let index = 0; index < 120; index++) {
+        response = await post(env, room, {nonce: 'rolling-' + index, expectedRevision: state.revision,
+          patch: {boats: 0, wind: (index % 10) / 10}});
+        state = await response.json(); assert.equal(response.status, 200); advance();
+      }
+      assert.equal(state.messages.length, 64); assert.equal(state.revision, 122);
+      assert.equal(JSON.parse(env.DB.row(room.id).history_json).length, 15);
+      assert.equal(state.messages.some(message => message.nonce === oldPatch.nonce), false);
+      const before = env.DB.row(room.id);
+      response = await post(env, room, oldPatch); const replayed = await response.json();
+      assert.equal(response.status, 200); assert.equal(replayed.revision, 122); assert.deepEqual(replayed.scene, state.scene);
+      assert.equal(replayed.receipt.nonce, oldPatch.nonce); assert.equal(replayed.receipt.revision, 1);
+      assert.equal(replayed.receipt.kind, 'patch'); assert.equal(replayed.receipt.replayed, true);
+      assert.equal(replayed.receipt._requestHash, undefined); assert.equal(replayed.receipt.mode, 'commands');
+      response = await post(env, room, oldUndo, undefined, '/undo');
+      assert.equal(response.status, 200); assert.equal((await response.json()).receipt.revision, 2);
+      response = await post(env, room, {...oldPatch, patch: {boats: 2}});
+      assert.equal(response.status, 409); assert.equal((await response.json()).code, 'NONCE_REUSED');
+      assert.deepEqual(env.DB.row(room.id), before);
+      assert.equal(env.DB.database.prepare('SELECT COUNT(*) AS count FROM operation_receipts WHERE room_id = ?').get(room.id).count, 122);
+    } finally { env.DB.close(); }
+  });
+});
+
+test('more than 20 AI calls work in one room and rolled-out AI successes and failures never run again', async () => {
+  await clock(async advance => {
+    const env = environment(); let calls = 0;
+    const interpret = async () => { calls++; return {supported: true, patch: {rain: 0.4}, reply: '真实测试解释结果'}; };
+    try {
+      const room = await created(env), oldAi = {nonce: 'first-ai', expectedRevision: 0, text: '下雨'};
+      let state = room;
+      for (let index = 0; index < 25; index++) {
+        const response = await post(env, room, index === 0 ? oldAi : {nonce: 'ai-' + index, expectedRevision: state.revision, text: '下雨'}, {interpret});
+        state = await response.json(); assert.equal(response.status, 200); advance();
+      }
+      assert.equal(calls, 25); assert.equal(env.DB.calls(), 25); assert.equal(env.DB.row(room.id).ai_calls, 25);
+      const oldFailure = {nonce: 'failed-before-roll', expectedRevision: state.revision, text: '无法完成的解释'};
+      let response = await post(env, room, oldFailure, {interpret: async () => { calls++; throw Error('fixture failure'); }});
+      const failure = await response.json(); assert.equal(response.status, 503); state = failure.current; advance();
+      for (let index = 0; index < 70; index++) {
+        response = await post(env, room, {nonce: 'after-ai-' + index, expectedRevision: state.revision, patch: {wind: index % 2}});
+        state = await response.json(); assert.equal(response.status, 200); advance();
+      }
+      assert.equal(state.messages.some(message => [oldAi.nonce, oldFailure.nonce].includes(message.nonce)), false);
+      const before = env.DB.row(room.id);
+      for (const [body, kind, revision] of [[oldAi, 'instruction', 2], [oldFailure, 'failed', 52]]) {
+        response = await post(env, room, body, {interpret}); const replayed = await response.json();
+        assert.equal(response.status, 200); assert.equal(replayed.receipt.kind, kind); assert.equal(replayed.receipt.revision, revision);
+        assert.equal(replayed.receipt.replayed, true); assert.deepEqual(replayed.scene, state.scene);
+      }
+      assert.equal(calls, 26); assert.equal(env.DB.calls(), 26); assert.deepEqual(env.DB.row(room.id), before);
+    } finally { env.DB.close(); }
+  });
+});
+
+test('a terminal timeout receipt survives log rollover and rejects a late provider result', async () => {
+  await clock(async (advance, elapse) => {
+    const env = environment(); let release, started, calls = 0;
+    const began = new Promise(resolve => { started = resolve; });
+    const interpret = () => { calls++; started(); return new Promise(resolve => { release = resolve; }); };
+    try {
+      const room = await created(env), body = {nonce: 'timeout-before-roll', expectedRevision: 0, text: '把树改成2棵'};
+      const pending = post(env, room, body, {interpret}); await began;
+      assert.equal(env.DB.receipt(room.id, body.nonce).kind, 'pending');
+      elapse(ROOM_LIMITS.busyMs + 1);
+      let state = await (await handleRooms(request(route(room), {token: room.token}), env)).json();
+      assert.equal(state.revision, 2); assert.equal(env.DB.receipt(room.id, body.nonce).kind, 'failed');
+      for (let index = 0; index < 70; index++) {
+        const response = await post(env, room, {nonce: 'after-timeout-' + index, expectedRevision: state.revision, patch: {wind: index % 2}});
+        state = await response.json(); assert.equal(response.status, 200); advance();
+      }
+      const before = env.DB.row(room.id), finalReceipt = env.DB.receipt(room.id, body.nonce);
+      release({supported: true, patch: {trees: 2}, reply: '这个解释已经超时'});
+      const response = await pending, late = await response.json();
+      assert.equal(response.status, 200); assert.equal(late.receipt.kind, 'failed'); assert.equal(late.receipt.revision, 2);
+      assert.equal(late.scene.trees, 40); assert.equal(late.revision, state.revision);
+      const replayed = await post(env, room, body, {interpret}); assert.equal(replayed.status, 200);
+      assert.equal((await replayed.json()).receipt.kind, 'failed'); assert.equal(calls, 1); assert.equal(env.DB.calls(), 1);
+      assert.deepEqual(env.DB.row(room.id), before); assert.deepEqual(env.DB.receipt(room.id, body.nonce), finalReceipt);
+    } finally { env.DB.close(); }
+  });
+});
+
+test('receipt persistence failures roll back room CAS before a model call or budget charge', async () => {
+  const env = environment(); let calls = 0;
+  try {
+    const room = await created(env), before = env.DB.row(room.id);
+    env.DB.database.exec("CREATE TRIGGER fixture_receipt_failure BEFORE INSERT ON operation_receipts BEGIN SELECT RAISE(ABORT, 'fixture receipt failed'); END");
+    for (const value of [{nonce: 'blocked-patch', expectedRevision: 0, patch: {rain: 1}}, {nonce: 'blocked-ai', expectedRevision: 0, text: '下雨'}]) {
+      const response = await post(env, room, value, {interpret: async () => { calls++; return {supported: true, patch: {rain: 1}, reply: 'fixture'}; }});
+      assert.equal(response.status, 500); assert.deepEqual(env.DB.row(room.id), before);
+      assert.equal(env.DB.receipt(room.id, value.nonce), undefined);
+    }
+    assert.equal(calls, 0); assert.equal(env.DB.calls(), 0);
+    env.DB.database.exec('DROP TRIGGER fixture_receipt_failure');
+    const response = await post(env, room, {nonce: 'allowed-patch', expectedRevision: 0, patch: {rain: 1}});
+    assert.equal(response.status, 200); const final = env.DB.row(room.id), messages = JSON.parse(final.messages_json);
+    messages[0].reply = 'altered terminal reply';
+    assert.throws(() => env.DB.database.prepare('UPDATE rooms SET revision = revision + 1, messages_json = ?, scene_json = ? WHERE id = ?')
+      .run(JSON.stringify(messages), JSON.stringify(createScene()), room.id), /immutable/);
+    assert.deepEqual(env.DB.row(room.id), final);
+    assert.throws(() => env.DB.database.prepare('UPDATE operation_receipts SET request_hash = ? WHERE room_id = ?').run('different', room.id), /immutable/);
+  } finally { env.DB.close(); }
+});
+
+test('a rolled-out global-budget rejection remains terminal even after budget becomes available', async () => {
+  await clock(async advance => {
+    const env = environment(); let calls = 0;
+    const interpret = async () => { calls++; return {supported: true, patch: {rain: 1}, reply: 'fixture'}; };
+    try {
+      const room = await created(env), body = {nonce: 'budget-before-roll', expectedRevision: 0, text: '下雨'};
+      env.DB.database.prepare('INSERT INTO ai_usage(day,calls) VALUES (?,?)').run(new Date().toISOString().slice(0, 10), 200);
+      let response = await post(env, room, body, {interpret}), result = await response.json();
+      assert.equal(response.status, 429); assert.equal(result.current.receipt.kind, 'failed');
+      let state = result.current; advance();
+      for (let index = 0; index < 70; index++) {
+        response = await post(env, room, {nonce: 'after-budget-' + index, expectedRevision: state.revision, patch: {wind: index % 2}});
+        state = await response.json(); assert.equal(response.status, 200); advance();
+      }
+      env.DB.database.prepare('UPDATE ai_usage SET calls = 0').run();
+      const before = env.DB.row(room.id);
+      response = await post(env, room, body, {interpret}); result = await response.json();
+      assert.equal(response.status, 200); assert.equal(result.receipt.kind, 'failed'); assert.equal(result.receipt.revision, 2);
+      assert.equal(result.receipt.replayed, true); assert.equal(calls, 0); assert.equal(env.DB.calls(), 0);
+      assert.equal(env.DB.row(room.id).ai_calls, 0); assert.deepEqual(env.DB.row(room.id), before);
+    } finally { env.DB.close(); }
+  });
+});
+
+test('the append-only migration preserves historical nonces and fails closed for missing legacy fingerprints', async () => {
+  const env = {DB: new SqliteD1({migrate: false}), ROOM_IP_SALT: 'fixture-only-salt-of-sufficient-length'};
+  try {
+    const room = await created(env), body = {nonce: 'before-migration', expectedRevision: 0, patch: {rain: 0.5}};
+    const message = {id: 'old-id', nonce: body.nonce, text: '旧修改', reply: '已修改', changes: [], at: new Date().toISOString(), kind: 'patch',
+      _mode: 'commands', _requestHash: createHash('sha256').update('{"patch":{"rain":0.5}}').digest('hex')};
+    env.DB.database.prepare('UPDATE rooms SET messages_json = ?, revision = 12 WHERE id = ?')
+      .run(JSON.stringify([message, {...message, nonce: 'missing-hash', _requestHash: undefined}]), room.id);
+    env.DB.database.exec(readFileSync(new URL('../drizzle/0001_open_marvel_apes.sql', import.meta.url), 'utf8'));
+    assert.equal(env.DB.receipt(room.id, body.nonce).revision, null);
+    let response = await post(env, room, body), state = await response.json();
+    assert.equal(response.status, 200); assert.equal(state.revision, 12); assert.equal(state.receipt.revision, null);
+    response = await post(env, room, {...body, nonce: 'missing-hash'});
+    assert.equal(response.status, 409); assert.equal((await response.json()).code, 'NONCE_REUSED');
+    response = await post(env, room, {nonce: 'after-migration', expectedRevision: 12, patch: {wind: 1}});
+    assert.equal(response.status, 200); assert.equal(env.DB.receipt(room.id, body.nonce).revision, null);
+  } finally { env.DB.close(); }
+});
+
+test('expired-room cleanup deletes receipts with foreign keys enabled or disabled', async () => {
+  for (const foreignKeys of ['ON', 'OFF']) {
+    const env = environment();
+    try {
+      const room = await created(env);
+      assert.equal((await post(env, room, {nonce: 'expired-operation', expectedRevision: 0, patch: {rain: 1}})).status, 200);
+      assert.ok(env.DB.receipt(room.id, 'expired-operation'));
+      env.DB.database.exec('PRAGMA foreign_keys = ' + foreignKeys);
+      env.DB.database.prepare('UPDATE rooms SET expires_at = ? WHERE id = ?').run(Date.now() - ROOM_LIMITS.ttlMs - 1, room.id);
+      await created(env);
+      assert.equal(env.DB.row(room.id), undefined); assert.equal(env.DB.receipt(room.id, 'expired-operation'), undefined);
+    } finally { env.DB.close(); }
+  }
+});
+
+test('canUndo reflects retained snapshots after more than 64 unchanged operations roll the edit out of messages', async () => {
+  await clock(async advance => {
+    const env = environment();
+    try {
+      const room = await created(env);
+      assert.equal(room.canUndo, false);
+      let response = await post(env, room, {nonce: 'only-scene-change', expectedRevision: 0, patch: {trees: 2}});
+      let state = await response.json(); assert.equal(response.status, 200); assert.equal(state.canUndo, true); advance();
+      for (let index = 0; index < 70; index++) {
+        response = await post(env, room, {nonce: 'unchanged-' + index, expectedRevision: state.revision, patch: {trees: 2}});
+        state = await response.json(); assert.equal(response.status, 200); advance();
+      }
+      assert.equal(state.messages.length, 64); assert.ok(state.messages.every(message => message.changes.length === 0));
+      assert.equal(state.canUndo, true); assert.equal(JSON.parse(env.DB.row(room.id).history_json).length, 1);
+      const polled = await (await handleRooms(request(route(room), {token: room.token}), env)).json();
+      assert.equal(polled.canUndo, true);
+      response = await post(env, room, {nonce: 'undo-after-noops', expectedRevision: state.revision}, undefined, '/undo');
+      state = await response.json(); assert.equal(response.status, 200); assert.equal(state.scene.trees, 40);
+      assert.equal(state.receipt.kind, 'undo'); assert.equal(state.canUndo, false);
+      assert.equal(env.DB.row(room.id).history_json, '[]');
+    } finally { env.DB.close(); }
+  });
 });

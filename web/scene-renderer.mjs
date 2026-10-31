@@ -538,9 +538,9 @@ export function mountLandscape(svgElement, { onSunDrag, onTreeSelect, onLeafSele
     layers.trajectory.setAttribute('transform','translate('+fixed(trajectoryFrame.x)+' '+fixed(trajectoryFrame.y)+') scale('+trajectoryFrame.scaleX+' '+trajectoryFrame.scaleY+')');
     const nextPath=[current.seed,current.wind,current.rain,JSON.stringify(current.leafOrigin),JSON.stringify(current.leafTarget),JSON.stringify(current.leafTrail)].join(':');
     if(nextPath!==pathKey){points=leafPath(current,{samples:81});layers.trajectory.querySelector('[data-path="current"]').setAttribute('d',pointsPath(points));pathKey=nextPath;}
-    const p=phasePoint(points,phase),mainLeaf=p;
+    const p=phasePoint(points,phase),tip=drawingMode?pathStroke?.points.at(-1):null,mainLeaf=tip?{...tip,rotation:p.rotation}:p;
     layers.leaf.setAttribute('transform',`translate(${fixed(trajectoryFrame.x+mainLeaf.x*WIDTH*trajectoryFrame.scaleX)} ${fixed(trajectoryFrame.y+mainLeaf.y*HEIGHT*trajectoryFrame.scaleY)}) rotate(${fixed(mainLeaf.rotation)}) scale(.65)`);
-    layers.leaf.style.display=current.trees&&!drawingMode?'':'none';
+    layers.leaf.style.display=current.trees?'':'none';
     layers.trajectory.style.display=showTrajectory&&current.trees&&!drawingMode?'':'none';
     const pixelsPerWorld=bounds?.width>0&&bounds?.height>0?Math.max(bounds.width/WIDTH,bounds.height/HEIGHT):1;
     for(const [handle,point] of Object.entries({origin:points[0],target:points.at(-1),phase:p})){
@@ -557,7 +557,7 @@ export function mountLandscape(svgElement, { onSunDrag, onTreeSelect, onLeafSele
     svgElement.setAttribute('data-boats',String(current.boats));
     svgElement.setAttribute('data-mountains',String(current.mountains));
     svgElement.setAttribute('data-motion-time',String(motionNow));svgElement.setAttribute('data-motion-playing',String(Boolean(motionPlaying)));
-    for(const [name,value] of Object.entries({hour:current.hour,trees:current.trees,rain:current.rain,wind:current.wind,'branch-angle':current.branchAngle,'branch-depth':current.branchDepth,flowers:current.flowers,phase,'leaf-x':p.x,'leaf-y':p.y,night:moon}))svgElement.setAttribute('data-'+name,String(value));
+    for(const [name,value] of Object.entries({hour:current.hour,trees:current.trees,rain:current.rain,wind:current.wind,'branch-angle':current.branchAngle,'branch-depth':current.branchDepth,flowers:current.flowers,phase,'leaf-x':mainLeaf.x,'leaf-y':mainLeaf.y,night:moon}))svgElement.setAttribute('data-'+name,String(value));
   }
 
   function updateSelection() {
@@ -608,6 +608,8 @@ export function mountLandscape(svgElement, { onSunDrag, onTreeSelect, onLeafSele
     if(active.raw.length>2048)active.raw=drawingPoints(active.raw,512);
     active.points=drawingPoints(active.raw);
     drawingPath.setAttribute('d',pointsPath(active.points));
+    const tip=active.points.at(-1);
+    if(tip&&current.trees){const point=worldCameraPoint(active.camera,tip);layers.leaf.setAttribute('transform','translate('+fixed(point.x)+' '+fixed(point.y)+') rotate('+(points.at(-1)?.rotation??0)+') scale(.65)');layers.leaf.style.display='';svgElement.setAttribute('data-leaf-x',String(tip.x));svgElement.setAttribute('data-leaf-y',String(tip.y));}
   }
   function emitPathDraw(phase,active=pathStroke) {
     onPathDraw?.({points:active.points.map(point=>({...point})),phase});
@@ -737,8 +739,16 @@ export function mountLandscape(svgElement, { onSunDrag, onTreeSelect, onLeafSele
     const target=event.target.closest?.('[data-select]');if(!target||!svgElement.contains(target))return;
     if(target.dataset.select==='leaf'&&typeof onLeafSelect==='function')onLeafSelect();
   };
+  function nudgeSelected({dx=0,dy=0}={}){
+    const record=objectRecords.get(selectedId);
+    if(!record||drawingMode||pathStroke||interactiveDrag||drag||typeof onObjectDrag!=='function'||!Number.isFinite(dx)||!Number.isFinite(dy))return false;
+    const before={...record.point},point={x:clamp(before.x+dx),y:clamp(before.y+dy)};
+    for(const phase of ['start','move','end'])onObjectDrag({id:record.id,kind:record.kind,point:phase==='start'?{...before}:{...point},phase});
+    return true;
+  }
   listen(svgElement,'click',select);
   listen(svgElement,'keydown',event=>{
+    if(event.defaultPrevented||event.isComposing||event.keyCode===229)return;
     const handle=event.target.closest?.('[data-trajectory-handle]');
     if(handle&&['ArrowLeft','ArrowRight','ArrowUp','ArrowDown'].includes(event.key)){
       event.preventDefault();const name=handle.dataset.trajectoryHandle;
@@ -750,12 +760,12 @@ export function mountLandscape(svgElement, { onSunDrag, onTreeSelect, onLeafSele
     const node=event.target.closest?.('[data-scene-object]'),record=node&&objectRecords.get(node.dataset.sceneObject);
     if(record&&['ArrowLeft','ArrowRight','ArrowUp','ArrowDown'].includes(event.key)&&typeof onObjectDrag==='function'){
       event.preventDefault();announceSelection(record);const step=event.shiftKey?.05:.01;
-      const point={x:clamp(record.point.x+({'ArrowLeft':-step,'ArrowRight':step}[event.key]??0)),y:clamp(record.point.y+({'ArrowUp':-step,'ArrowDown':step}[event.key]??0))};
-      for(const phase of ['start','move','end'])onObjectDrag({id:record.id,kind:record.kind,point:phase==='start'?{...record.point}:{...point},phase});
+      nudgeSelected({dx:({'ArrowLeft':-step,'ArrowRight':step}[event.key]??0),dy:({'ArrowUp':-step,'ArrowDown':step}[event.key]??0)});
     }else if((record||event.target.closest?.('[data-select]'))&&['Enter',' '].includes(event.key)){event.preventDefault();select(event);}
   });
   return {
     render,
+    nudgeSelected,
     cancelPathDraw:()=>finishPathDraw(null,true),
     getObjectPositions:()=>Object.freeze(Array.from(objectRecords.values()).map(record=>Object.freeze({id:record.id,kind:record.kind,point:Object.freeze({...record.point})}))),
     getSvgMarkup:()=>svgElement.outerHTML,

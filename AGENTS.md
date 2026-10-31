@@ -27,8 +27,10 @@ Do not simulate synchronization, model responses, online members or completed wo
   adapter. Preserve capability authorization, same-origin
   writes, payload limits, nonce idempotency and revision CAS. A stale response must
   not overwrite a newer scene.
-- Preserve six-hour expiry, bounded messages/history, creation limits, per-room AI
-  limits and the daily model budget. Persist a pending nonce before an external
+- Rooms have no cumulative edit or per-room AI call ceiling. Keep six-hour expiry,
+  bounded recent messages/history, creation throttles and the daily model budget.
+  Durable operation receipts must outlive rolling messages for the room's lifetime.
+  Persist a pending nonce before an external
   request; replay must not call the model again. Show actual pending, failed,
   unsupported and applied outcomes.
 - Conversations use ClawHunt and the configured Doubao model through the server

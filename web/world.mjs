@@ -2,7 +2,7 @@ import qrcode from 'qrcode-generator';
 import {createScene,validateScene,updateScene,sceneChanges,moveSceneObject} from './scene-model.mjs';
 import {mountLandscape} from './scene-renderer.mjs';
 import {mountCodePanel} from './code-panel.mjs';
-import {mountDirectEditor} from './direct-edit.mjs';
+import {mountDirectEditor,SHORTCUTS} from './direct-edit.mjs';
 import {mountLandscapeMusic} from './music.mjs';
 const $=selector=>document.querySelector(selector),$$=selector=>[...document.querySelectorAll(selector)];
 const esc=value=>String(value??'').replace(/[&<>"']/g,char=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));
@@ -14,6 +14,7 @@ let codePanel=null,codeBefore=null,codeDraft=false,roomConnection=null,connectin
 const reduced=matchMedia('(prefers-reduced-motion: reduce)').matches;if(reduced)playing=false;
 let drawingTrajectory=false,motionTime=0,motionPlaying=!reduced;
 let backgroundMusic=null;
+let drawingSnapshot=null,shortcutHelpFocus=null;
 try{const raw=localStorage.getItem(STORAGE);if(raw)scene=validateScene(JSON.parse(raw));}catch{}
 const hash=new URLSearchParams(location.hash.slice(1));
 if(/^[0-9a-f]{32}$/.test(hash.get('room')??'')&&/^[0-9a-f]{64}$/.test(hash.get('key')??''))room={id:hash.get('room'),token:hash.get('key'),revision:0,connected:false,messages:[]};
@@ -28,7 +29,8 @@ function showChanges(changes){latestChanges=changes;$('#change-chips').innerHTML
 function renderControls(){
  $('#time-label').textContent=formatHour(scene.hour);$('#hour-value').textContent=formatHour(scene.hour);$('#angle-value').textContent=scene.branchAngle+'°';$('#depth-value').textContent=scene.branchDepth;$('#wind-value').textContent=Math.round(scene.wind*100)+'%';
  for(const [id,key] of [['hour-range','hour'],['angle-range','branchAngle'],['depth-range','branchDepth'],['wind-range','wind']]){const input=$('#'+id);if(input!==document.activeElement)input.value=String(scene[key]);input.disabled=busy||connecting||codeDraft||drawingTrajectory;}
- $('#undo-world').disabled=busy||connecting||codeDraft||drawingTrajectory||(!room&&!localHistory.length)||(room&&!room.messages?.some(m=>m.changes?.length));
+ const sharedCanUndo=typeof room?.canUndo==='boolean'?room.canUndo:room?.messages?.some(m=>m.changes?.length);
+ $('#undo-world').disabled=busy||connecting||codeDraft||drawingTrajectory||(!room&&!localHistory.length)||(room&&!sharedCanUndo);
  $('#send').disabled=busy||connecting||codeDraft||drawingTrajectory;$$('.suggestions button').forEach(button=>button.disabled=busy||connecting||codeDraft||drawingTrajectory);$('#share-world').disabled=busy&&!room;
  $('#suggestions').hidden=!!lastReply||!!room?.messages?.length;
  $('#play-leaf').textContent=playing&&motionPlaying?'Ⅱ':'▶';
@@ -40,23 +42,33 @@ function renderControls(){
 }
 function renderScene(){renderer.render(scene,{phase,showTrajectory:selected==='leaf',compareScene:leafCompare,selectedObject:directEditor?.selectedId,drawingTrajectory,motionTime,motionPlaying});if(document.body.classList.contains('mobile-code-open'))previewRenderer.render(scene,{phase,showTrajectory:selected==='leaf',compareScene:leafCompare,motionTime,motionPlaying});}
 function render(){renderScene();renderControls();}
+function restoreDrawing(){
+ if(drawingSnapshot){scene=drawingSnapshot.scene;phase=drawingSnapshot.phase;playing=drawingSnapshot.playing;selected=drawingSnapshot.selected;leafCompare=drawingSnapshot.leafCompare;}
+ drawingSnapshot=null;editBefore=null;
+}
 function setDrawing(enabled){
  if(enabled&&(busy||connecting||codeDraft))return;
- drawingTrajectory=enabled;editBefore=null;
+ if(!enabled)restoreDrawing();else editBefore=null;
+ drawingTrajectory=enabled;
  if(enabled){directEditor?.select(null);selected=null;leafCompare=null;$('#inspector').hidden=true;quietOpening();}
  render();
 }
 function pathDraw({points,phase:drawPhase}){
- if(drawPhase==='cancel'){editBefore=null;if(drawingTrajectory){drawingTrajectory=false;render();}return;}
+ if(drawPhase==='cancel'){restoreDrawing();drawingTrajectory=false;render();return;}
  if(busy||connecting||codeDraft)return false;
- if(drawPhase==='start'){editBefore=scene;return;}
+ if(drawPhase==='start'){drawingSnapshot={scene,phase,playing,selected,leafCompare};editBefore=scene;phase=1;playing=false;render();return;}
+ if(drawPhase==='move'){
+  if(Array.isArray(points)&&points.length>=2){scene=updateScene(editBefore??scene,{leafTrail:points,leafOrigin:points[0],leafTarget:points.at(-1)});selected='leaf';phase=1;render();}
+  return;
+ }
  if(drawPhase!=='end')return;
  drawingTrajectory=false;
- if(!Array.isArray(points)||points.length<2){editBefore=null;render();return;}
+ if(!Array.isArray(points)||points.length<2){restoreDrawing();render();return;}
+ drawingSnapshot=null;
  selected='leaf';leafCompare=null;phase=0;playing=true;
  finishDirect({leafTrail:points,leafOrigin:points[0],leafTarget:points.at(-1)});
 }
-function inspector(kind){if(drawingTrajectory){drawingTrajectory=false;editBefore=null;}selected=kind;$('#inspector').hidden=!kind;$$('[data-inspector]').forEach(node=>node.hidden=node.dataset.inspector!==kind);$('#inspector-title').textContent=kind==='tree'?'这棵树怎样生长':kind==='leaf'?'把落叶的过程摊开看':'太阳与时间';if(kind==='leaf')leafCompare=scene;render();quietOpening();}
+function inspector(kind){if(drawingTrajectory){drawingTrajectory=false;restoreDrawing();}selected=kind;$('#inspector').hidden=!kind;$$('[data-inspector]').forEach(node=>node.hidden=node.dataset.inspector!==kind);$('#inspector-title').textContent=kind==='tree'?'这棵树怎样生长':kind==='leaf'?'把落叶的过程摊开看':'太阳与时间';if(kind==='leaf')leafCompare=scene;render();quietOpening();}
 function objectDrag({id,point,phase:dragPhase}){
  if(busy||connecting||codeDraft)return false;
  if(dragPhase==='start')editBefore=scene;
@@ -80,7 +92,7 @@ directEditor=mountDirectEditor($('#live-stage'),{
  getScene:()=>scene,getObjects:()=>renderer.getObjectPositions(),onCommit:patch=>finishDirect(patch),
  onSelection(id,kind){if(kind==='tree'){inspector('tree');return;}selected=null;leafCompare=null;$('#inspector').hidden=true;render();quietOpening();},
  onInspect(kind){if(kind==='leaf')directEditor?.select(null);inspector(kind);},onUndo:()=>$('#undo-world').click(),notify:toast
- ,onDraw:()=>setDrawing(!drawingTrajectory),onToggleMotion(){motionPlaying=!motionPlaying;render();}
+ ,onDraw:()=>setDrawing(!drawingTrajectory),onToggleMotion(){motionPlaying=!motionPlaying;render();},onHelp:showShortcuts,onNudge:delta=>renderer.nudgeSelected(delta)
 });
 function animate(now){const delta=Math.min((now-lastFrame)/1000,.1);lastFrame=now;if(motionPlaying&&stageVisible&&!document.hidden){motionTime+=delta;if(playing)phase=(phase+delta/7)%1;renderScene();if(selected==='leaf'&&$('#leaf-time')!==document.activeElement)$('#leaf-time').value=String(phase);}requestAnimationFrame(animate);}
 function setConnection(text,connected=false){$('#connection').textContent=text;$('#connection').classList.toggle('connected',connected);}
@@ -100,14 +112,15 @@ function renderMessages(){
 function acceptState(state){
  if(!state||!state.scene||!Number.isSafeInteger(state.revision))throw Error('服务器状态无效');
  if(room&&state.id===room.id&&state.revision<room.revision)return false;
- scene=validateScene(state.scene);room={...room,...state,connected:true};codeDraft=false;editBefore=null;
+ scene=validateScene(state.scene);room={...room,...state,receipt:state.receipt??null,connected:true};codeDraft=false;editBefore=null;
  const lastChange=[...(room.messages??[])].reverse().find(message=>message.changes?.length);
  codeBefore=lastChange?updateScene(scene,Object.fromEntries(lastChange.changes.map(change=>[change.key,change.before]))):scene;
  codePanel?.update(scene,{before:codeBefore,selected,busy:busy||connecting,resetDraft:true});
- if(lastRequest&&room.messages?.some(message=>message.nonce===lastRequest.nonce&&message.kind!=='pending'))$('#retry').hidden=true;
+ if(lastRequest&&receiptFor(lastRequest.nonce)?.kind!=='pending'&&receiptFor(lastRequest.nonce))$('#retry').hidden=true;
  shareUnavailable=false;setConnection('同一风景 · 已连接',true);renderMessages();render();renderInvite();
  return true;
 }
+function receiptFor(nonce,state=room){return state?.receipt?.nonce===nonce?state.receipt:state?.messages?.find(message=>message.nonce===nonce);}
 async function request(path,{method='GET',body,timeout=29000}={}){
  const headers={};if(room?.token)headers.Authorization='Bearer '+room.token;if(body)headers['Content-Type']='application/json';
  const response=await fetch(path,{method,headers,body:body?JSON.stringify(body):undefined,signal:AbortSignal.timeout(timeout),cache:'no-store'});
@@ -144,10 +157,10 @@ async function sendOperation(payload,undo=false,retryRequest=null){
   try{result=await request('/api/rooms/'+room.id+(undo?'/undo':''),{method:'POST',body:{nonce,expectedRevision:operation.expectedRevision,...operation.payload}});break;}
   catch(error){if(attempt===0&&error.status===429&&error.code==='ROOM_RATE_LIMIT'){await new Promise(resolve=>setTimeout(resolve,1100));continue;}throw error;}
  }
- const {data,status:httpStatus}=result;acceptState(data);if(httpStatus===202&&room.messages?.some(message=>message.nonce===nonce&&message.kind==='pending')){status('请求仍在处理中，正在同步实际结果。');busy=true;}else busy=false;
+ const {data,status:httpStatus}=result;acceptState(data);if(httpStatus===202&&receiptFor(nonce)?.kind==='pending'){status('请求仍在处理中，正在同步实际结果。');busy=true;}else busy=false;
  }catch(error){if(error.current)acceptState(error.current);else if(room?.scene){scene=validateScene(room.scene);render();}busy=false;if(error.status===409){status('风景刚在另一端变化了，已更新到最新状态。请再试这次修改。');}else{status(error.message==='The operation was aborted due to timeout'?'请求尚未确认，正在读取房间中的实际结果。':error.message);}
- if(room&&(!error.status||error.status>=500)){try{const {data}=await request('/api/rooms/'+room.id,{timeout:8000});acceptState(data);busy=data.messages?.some(m=>m.nonce===nonce&&m.kind==='pending')??false;}catch{}}
- const recorded=room?.messages?.find(message=>message.nonce===nonce);
+ if(room&&(!error.status||error.status>=500)){try{const {data}=await request('/api/rooms/'+room.id,{timeout:8000});acceptState(data);busy=receiptFor(nonce,data)?.kind==='pending';}catch{}}
+ const recorded=receiptFor(nonce);
  operation.retryAsNew=error.status===409&&!recorded;
  $('#retry').hidden=busy||!!(recorded&&recorded.kind!=='pending')||!!(error.status&&error.status<500&&![409,429].includes(error.status));
  }finally{writeNotBefore=Math.max(writeNotBefore,Date.now()+1050);operation.inFlight=false;renderControls();schedulePoll();}
@@ -171,7 +184,7 @@ $('#show-tree').addEventListener('click',()=>inspector('tree'));$('#show-time').
 $('#play-leaf').addEventListener('click',()=>{if(!motionPlaying){playing=true;motionPlaying=true;}else playing=!playing;render();});$('#leaf-time').addEventListener('input',event=>{playing=false;phase=Number(event.target.value);render();});
 $('#draw-leaf-route').addEventListener('click',()=>setDrawing(true));$('#cancel-draw-route').addEventListener('click',()=>setDrawing(false));
 $('#reset-leaf-route').addEventListener('click',()=>{if(busy||connecting||codeDraft)return;const original=createScene();finishDirect({leafTrail:[],leafOrigin:original.leafOrigin,leafTarget:original.leafTarget});});
-document.addEventListener('keydown',event=>{if(drawingTrajectory&&event.key==='Escape'){event.preventDefault();event.stopImmediatePropagation();setDrawing(false);}},true);
+document.addEventListener('keydown',event=>{if(event.key!=='Escape')return;if($('#shortcut-help').open){event.preventDefault();event.stopImmediatePropagation();$('#shortcut-help').close();return;}if(drawingTrajectory){event.preventDefault();event.stopImmediatePropagation();setDrawing(false);}},true);
 let shareFocus,aboutFocus;
 function qrSvg(text){const code=qrcode(0,'M');code.addData(text);code.make();const n=code.getModuleCount();let d='';for(let r=0;r<n;r++)for(let c=0;c<n;c++)if(code.isDark(r,c))d+=`M${c+4} ${r+4}h1v1h-1z`;return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${n+8} ${n+8}" shape-rendering="crispEdges" aria-hidden="true"><rect width="100%" height="100%" fill="white"/><path d="${d}" fill="#173847"/></svg>`;}
 function inviteUrl(){const url=new URL(location.href);url.searchParams.set('control','1');url.hash=new URLSearchParams({room:room.id,key:room.token}).toString();return url.href;}
@@ -205,6 +218,10 @@ window.visualViewport?.addEventListener('resize',keyboardViewport);window.visual
 
 const stage=$('#live-stage');
 stage.append($('#inspector'));
+const shortcutsDialog=$('#shortcut-help');stage.append(shortcutsDialog);
+$('#shortcut-list').innerHTML=SHORTCUTS.map(item=>`<div><dt><kbd>${esc(item.key)}</kbd></dt><dd><strong>${esc(item.label)}</strong><span>${esc(item.description)}</span></dd></div>`).join('');
+function showShortcuts(){shortcutHelpFocus=document.activeElement;if(!shortcutsDialog.open)shortcutsDialog.showModal();}
+$('#close-shortcuts').addEventListener('click',()=>shortcutsDialog.close());shortcutsDialog.addEventListener('close',()=>shortcutHelpFocus?.focus({preventScroll:true}));
 function scrollToElement(id){const element=document.getElementById(id);element?.scrollIntoView({block:id==='experience'?'center':'start',behavior:reduced?'instant':'smooth'});}
 $$('[data-scroll]').forEach(button=>button.addEventListener('click',()=>scrollToElement(button.dataset.scroll)));
 $$('[data-start]').forEach(button=>button.addEventListener('click',()=>{scrollToElement('experience');$('#instruction').focus({preventScroll:true});quietOpening();}));

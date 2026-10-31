@@ -1,4 +1,6 @@
 import {SCENE_LIMITS, updateScene, duplicateSceneObject, removeSceneObject} from './scene-model.mjs';
+import {canvasShortcut,SHORTCUTS} from './shortcut-model.mjs';
+export {SHORTCUTS};
 
 const TYPES = Object.freeze({tree:{key:'trees',label:'树'},mountain:{key:'mountains',label:'山'},boat:{key:'boats',label:'船'},bird:{key:'birds',label:'鸟'}});
 const bound = value => Math.round(Math.max(.02,Math.min(.98,value))*1e6)/1e6;
@@ -7,21 +9,26 @@ function button(text, label, action) {
 }
 
 /** Canvas actions share the same validated scene and commit path as text and JSON. */
-export function mountDirectEditor(stage,{getScene,getObjects,onCommit,onSelection,onInspect,onUndo,onDraw,onToggleMotion,notify=()=>{}}) {
- let selectedId=null,clipboard=null,busy=false,drawing=false,motionPlaying=true;
+export function mountDirectEditor(stage,{getScene,getObjects,onCommit,onSelection,onInspect,onUndo,onDraw,onToggleMotion,onHelp,onNudge,notify=()=>{}}) {
+ let selectedId=null,clipboard=null,busy=false,drawing=false,motionPlaying=true,canvasActive=false;
+ const addedTabIndex=!stage.hasAttribute('tabindex');if(addedTabIndex)stage.tabIndex=-1;
  const tools=document.createElement('div');tools.className='canvas-tools';tools.setAttribute('role','toolbar');tools.setAttribute('aria-label','画面内编辑工具');
  const menu=document.createElement('div');menu.className='canvas-add-menu';menu.hidden=true;
  const add=button('＋ 添加','添加风景对象',()=>{menu.hidden=!menu.hidden;add.setAttribute('aria-expanded',String(!menu.hidden));});add.setAttribute('aria-expanded','false');
  const trajectory=button('落叶轨迹','在画面中调整落叶轨迹',()=>onInspect('leaf'));
  const draw=button('画落叶路线','直接手绘落叶飞行路线',()=>onDraw());draw.setAttribute('aria-pressed','false');
  const motion=button('Ⅱ','暂停风景动画',()=>onToggleMotion());motion.className='motion-toggle';
- tools.append(draw,trajectory,add,motion,menu);stage.append(tools);
+ const help=button('?','查看画布快捷键（?）',()=>onHelp?.());help.className='shortcut-help';
+ tools.append(draw,trajectory,add,motion,help,menu);stage.append(tools);
  const dock=document.createElement('div');dock.className='object-tools';dock.hidden=true;dock.setAttribute('role','toolbar');dock.setAttribute('aria-label','选中对象操作');
  const label=document.createElement('span');label.className='object-tools-label';
  const copy=button('复制','复制选中对象（⌘/Ctrl+C）',copyObject),paste=button('粘贴','粘贴风景对象（⌘/Ctrl+V）',pasteObject);
  const duplicate=button('再来一个','再复制一个选中对象（⌘/Ctrl+D）',duplicateObject);
  const shape=button('枝形','直接调整树枝形态',()=>onInspect('tree'));
  const remove=button('删除','删除选中对象（Delete）',removeObject),undo=button('↶','撤销画面修改',onUndo),close=button('×','取消对象选择',()=>select(null));
+ for(const [node,keys,tip] of [[draw,'r','R'],[motion,'Space','Space'],[help,'Shift+/','?'],[copy,'Meta+c Control+c','⌘/Ctrl+C'],[paste,'Meta+v Control+v','⌘/Ctrl+V'],[duplicate,'Meta+d Control+d','⌘/Ctrl+D'],[remove,'Delete Backspace','Delete'],[undo,'Meta+z Control+z','⌘/Ctrl+Z'],[close,'Escape','Esc']]){
+  node.setAttribute('aria-keyshortcuts',keys);node.title=node.getAttribute('aria-label')+' · '+tip;
+ }
  dock.append(label,copy,paste,duplicate,shape,remove,undo,close);stage.append(dock);
  const additions=[];
  for(const [kind,type] of Object.entries(TYPES)){
@@ -83,19 +90,37 @@ export function mountDirectEditor(stage,{getScene,getObjects,onCommit,onSelectio
   stage.classList.toggle('has-object-selection',!!selectedId);stage.dataset.selectedObject=selectedId??'';
  }
  function keydown(event){
-  if(event.target.closest('input,textarea,select,[contenteditable]')||document.querySelector('dialog[open]'))return;
-  if(drawing){if((event.ctrlKey||event.metaKey)&&['v','d'].includes(event.key.toLowerCase()))event.preventDefault();return;}
-  if(!selectedId&&!clipboard)return;
-  if(event.key==='Escape'&&selectedId){event.preventDefault();event.stopImmediatePropagation();select(null);return;}
-  const modifier=event.metaKey||event.ctrlKey,key=event.key.toLowerCase();
-  if(modifier&&['c','v','d'].includes(key)&&!event.altKey){event.preventDefault();event.stopImmediatePropagation();if(key==='c')copyObject();else if(key==='v')pasteObject();else duplicateObject();}
-  else if(selectedId&&['Delete','Backspace'].includes(event.key)){event.preventDefault();removeObject();}
+  const target=event.target,rect=stage.getBoundingClientRect(),view=stage.ownerDocument.defaultView;
+  const fullscreen=document.fullscreenElement===stage||document.webkitFullscreenElement===stage||document.body.classList.contains('focus-mode');
+  const action=canvasShortcut(event,{
+   active:canvasActive||fullscreen||stage.contains(document.activeElement),
+   visible:!document.hidden&&rect.width>0&&rect.height>0&&rect.bottom>0&&rect.right>0&&rect.top<(view?.innerHeight??innerHeight)&&rect.left<(view?.innerWidth??innerWidth),
+   editing:target.isContentEditable||!!target.closest?.('input,textarea,select,[contenteditable]:not([contenteditable="false"])'),
+   dialog:!!document.querySelector('dialog[open]'),busy,drawing,selected:!!selectedId,clipboard:!!clipboard,
+   nativeSpace:stage.contains(target)&&!!target.closest?.('button,a[href],[role="button"]')
+  });
+  if(!action||(action.type==='nudge'&&typeof onNudge!=='function'))return;
+  event.preventDefault();event.stopImmediatePropagation();
+  if(action.type==='draw'||action.type==='cancel-draw')onDraw?.();
+  else if(action.type==='motion')onToggleMotion?.();
+  else if(action.type==='music')stage.querySelector('.music-toggle')?.click();
+  else if(action.type==='help')onHelp?.();
+  else if(action.type==='undo')onUndo?.();
+  else if(action.type==='copy')copyObject();
+  else if(action.type==='paste')pasteObject();
+  else if(action.type==='duplicate')duplicateObject();
+  else if(action.type==='remove')removeObject();
+  else if(action.type==='cancel-selection')select(null);
+  else if(action.type==='nudge')onNudge({dx:action.dx,dy:action.dy});
  }
  document.addEventListener('keydown',keydown);
- stage.addEventListener('pointerdown',event=>{
+ const activate=event=>{canvasActive=stage.contains(event.target);if(canvasActive&&event.type==='pointerdown'&&event.target.closest?.('#landscape,#world'))stage.focus({preventScroll:true});};
+ document.addEventListener('pointerdown',activate,{capture:true});document.addEventListener('focusin',activate,{capture:true});
+ const clearSelection=event=>{
   if(event.target.closest('[data-scene-object],[data-select],[data-role="sun-control"],[data-trajectory-handle],.canvas-tools,.object-tools,.inspector,.presentation-tools'))return;
   if(selectedId)select(null);menu.hidden=true;add.setAttribute('aria-expanded','false');
- });
+ };
+ stage.addEventListener('pointerdown',clearSelection);
  update(getScene());
- return {select,update,get selectedId(){return selectedId;},destroy(){document.removeEventListener('keydown',keydown);tools.remove();dock.remove();}};
+ return {select,update,get selectedId(){return selectedId;},destroy(){document.removeEventListener('keydown',keydown);document.removeEventListener('pointerdown',activate,{capture:true});document.removeEventListener('focusin',activate,{capture:true});stage.removeEventListener('pointerdown',clearSelection);if(addedTabIndex)stage.removeAttribute('tabindex');tools.remove();dock.remove();}};
 }

@@ -2,8 +2,11 @@ import {createScene, validateScene, updateScene, sceneChanges, interpretInstruct
 
 export const ROOM_LIMITS = Object.freeze({bodyBytes: 8192, text: 400, messages: 64, history: 15,
   ttlMs: 6 * 60 * 60 * 1000, activeRooms: 500, creationsPerHour: 10, intervalMs: 1000,
-  roomAiCalls: 20, dailyAiCalls: 200, aiTimeoutMs: 25000, busyMs: 30000});
+  dailyAiCalls: 200, aiTimeoutMs: 25000, busyMs: 30000});
 const GET_ROOM = 'SELECT * FROM rooms WHERE id = ?';
+// Read the room and its receipt in one SQLite snapshot, including during an AI
+// finalization race. A pending receipt must never accompany a terminal room row.
+const GET_OPERATION = 'SELECT rooms.*, receipt.request_hash AS receipt_request_hash, receipt.message_json AS receipt_message_json, receipt.kind AS receipt_kind, receipt.revision AS receipt_revision FROM rooms JOIN operation_receipts AS receipt ON receipt.room_id = rooms.id WHERE rooms.id = ? AND receipt.nonce = ?';
 const plain = value => value !== null && typeof value === 'object' && Object.getPrototypeOf(value) === Object.prototype;
 class RoomError extends Error {
   constructor(status, code, message, current) { super(message); this.status = status; this.code = code; this.current = current; }
@@ -70,8 +73,8 @@ function contents(row) {
   } catch { fail(500, 'ROOM_STATE_INVALID', '房间记录暂时无法读取。'); }
 }
 function publicState(row, mode) {
-  const {scene, messages} = contents(row);
-  return {id: row.id, revision: row.revision, scene,
+  const {scene, messages, history} = contents(row);
+  return {id: row.id, revision: row.revision, scene, canUndo: history.length > 0,
     messages: messages.map(({id, nonce, text, reply, changes, at, kind}) => ({id, nonce, text, reply, changes, at, kind})),
     expiresAt: row.expires_at, mode: messages.at(-1)?._mode ?? mode};
 }
@@ -97,17 +100,31 @@ function commandInput(value, undo) {
     else requireValue(plain(value.patch) && Object.keys(value.patch).length > 0, '请提供明确的场景修改。');
   }
 }
-function replay(row, nonce, requestHash, mode) {
-  const message = contents(row).messages.find(item => item.nonce === nonce);
-  if (!message) return null;
-  if (message._requestHash !== requestHash) fail(409, 'NONCE_REUSED', '这个请求编号已用于另一项操作，请使用新编号。', publicState(row, mode));
-  return json(publicState(row, mode), message.kind === 'pending' ? 202 : 200);
+function publicReceipt(row, replayed) {
+  const {id, nonce, text, reply, changes, at, kind, _mode} = JSON.parse(row.receipt_message_json);
+  return {id, nonce, text, reply, changes, at, kind, revision: row.receipt_revision, mode: _mode, replayed};
+}
+async function operationState(db, row, nonce, mode, replayed = false) {
+  const current = await first(db, GET_OPERATION, row.id, nonce);
+  if (!current) fail(500, 'ROOM_STATE_INVALID', '操作回执暂时无法读取。');
+  return {...publicState(current, mode), receipt: publicReceipt(current, replayed)};
+}
+async function replay(db, row, nonce, requestHash, mode) {
+  let current = await first(db, GET_OPERATION, row.id, nonce);
+  if (!current) return null;
+  if (current.expires_at <= Date.now()) fail(410, 'ROOM_EXPIRED', '这个房间已到期，请创建新房间。');
+  if (current.receipt_request_hash !== requestHash) fail(409, 'NONCE_REUSED', '这个请求编号已用于另一项操作，请使用新编号。', publicState(current, mode));
+  if (current.receipt_kind === 'pending' && current.busy_nonce === nonce && current.busy_until <= Date.now()) {
+    await expireBusy(db, current);
+    current = await first(db, GET_OPERATION, row.id, nonce);
+    if (!current) fail(410, 'ROOM_EXPIRED', '这个房间已到期，请创建新房间。');
+  }
+  return json({...publicState(current, mode), receipt: publicReceipt(current, true)}, current.receipt_kind === 'pending' ? 202 : 200);
 }
 function writable(row, value, mode) {
   const current = publicState(row, mode);
   if (row.revision !== value.expectedRevision) fail(409, 'REVISION_CONFLICT', '房间已有更新，请先查看最新场景。', current);
   if (row.busy_nonce) fail(409, 'ROOM_BUSY', '房间正在处理一条消息，请稍后查看结果。', current);
-  if (contents(row).messages.length >= ROOM_LIMITS.messages) fail(429, 'ROOM_COMMAND_LIMIT', '这个房间已达到 64 条操作，请创建新房间。', current);
   if (row.next_message_at > Date.now()) fail(429, 'ROOM_RATE_LIMIT', '操作有些频繁，请稍等一秒。', current);
 }
 async function expireBusy(db, row) {
@@ -148,12 +165,12 @@ async function commitChange(db, row, value, requestHash, mode, next, reply, kind
   const state = contents(row), changes = sceneChanges(state.scene, next);
   const history = changes.length && kind !== 'undo' ? [...state.history, state.scene].slice(-ROOM_LIMITS.history) :
     kind === 'undo' && state.history.length ? state.history.slice(0, -1) : state.history;
-  const messages = [...state.messages, newMessage(value, requestHash, mode, kind, reply, changes)], now = Date.now();
+  const messages = [...state.messages, newMessage(value, requestHash, mode, kind, reply, changes)].slice(-ROOM_LIMITS.messages), now = Date.now();
   const updated = await first(db, 'UPDATE rooms SET revision = revision + 1, scene_json = ?, messages_json = ?, history_json = ?, next_message_at = ? WHERE id = ? AND revision = ? AND expires_at > ? AND next_message_at <= ? AND busy_nonce IS NULL RETURNING *',
     JSON.stringify(next), JSON.stringify(messages), JSON.stringify(history), now + ROOM_LIMITS.intervalMs,
     row.id, row.revision, now, now);
   if (!updated) fail(409, 'REVISION_CONFLICT', '房间已有更新，本次操作未覆盖它。', publicState(await first(db, GET_ROOM, row.id), mode));
-  return json(publicState(updated, mode));
+  return json(await operationState(db, updated, value.nonce, mode));
 }
 async function finishAi(db, row, nonce, next, reply, kind, mode, refund = false) {
   const state = contents(row), changes = sceneChanges(state.scene, next);
@@ -169,23 +186,22 @@ async function timedInterpret(interpret, text, scene) {
   finally { clearTimeout(timer); }
 }
 async function aiCommand(db, row, value, requestHash, mode, interpret) {
-  if (row.ai_calls >= ROOM_LIMITS.roomAiCalls) fail(429, 'ROOM_AI_LIMIT', '这个房间已达到 20 次模型请求。直接调景和撤销仍可使用。', publicState(row, mode));
   const state = contents(row), now = Date.now();
   const pending = newMessage(value, requestHash, mode, 'pending', '请求已提交，正在等待实际解释结果；场景尚未改变。', []);
-  const reserved = await first(db, 'UPDATE rooms SET revision = revision + 1, messages_json = ?, ai_calls = ai_calls + 1, busy_nonce = ?, busy_until = ?, next_message_at = ? WHERE id = ? AND revision = ? AND expires_at > ? AND next_message_at <= ? AND busy_nonce IS NULL AND ai_calls < ? RETURNING *',
-    JSON.stringify([...state.messages, pending]), value.nonce, now + ROOM_LIMITS.busyMs, now + ROOM_LIMITS.intervalMs,
-    row.id, row.revision, now, now, ROOM_LIMITS.roomAiCalls);
+  const reserved = await first(db, 'UPDATE rooms SET revision = revision + 1, messages_json = ?, ai_calls = ai_calls + 1, busy_nonce = ?, busy_until = ?, next_message_at = ? WHERE id = ? AND revision = ? AND expires_at > ? AND next_message_at <= ? AND busy_nonce IS NULL RETURNING *',
+    JSON.stringify([...state.messages, pending].slice(-ROOM_LIMITS.messages)), value.nonce, now + ROOM_LIMITS.busyMs, now + ROOM_LIMITS.intervalMs,
+    row.id, row.revision, now, now);
   if (!reserved) fail(409, 'REVISION_CONFLICT', '房间已有更新，请先查看最新状态。', publicState(await first(db, GET_ROOM, row.id), mode));
   let budget;
   try { budget = await first(db, 'INSERT INTO ai_usage (day, calls) VALUES (?, 1) ON CONFLICT(day) DO UPDATE SET calls = ai_usage.calls + 1 WHERE ai_usage.calls < ? RETURNING calls',
     new Date().toISOString().slice(0, 10), ROOM_LIMITS.dailyAiCalls); }
   catch {
     const failed = await finishAi(db, reserved, value.nonce, state.scene, '服务预算暂时无法核对，没有调用模型或修改场景。', 'failed', mode, true);
-    fail(503, 'AI_BUDGET_UNAVAILABLE', '服务预算暂时不可用。', publicState(failed ?? reserved, mode));
+    fail(503, 'AI_BUDGET_UNAVAILABLE', '服务预算暂时不可用。', await operationState(db, failed ?? reserved, value.nonce, mode));
   }
   if (!budget) {
     const failed = await finishAi(db, reserved, value.nonce, state.scene, '今天的模型调用额度已用完，没有调用模型。直接调景仍可使用。', 'failed', mode, true);
-    fail(429, 'DAILY_AI_LIMIT', '今天已达到 200 次模型请求。', publicState(failed ?? reserved, mode));
+    fail(429, 'DAILY_AI_LIMIT', '今天已达到 200 次模型请求。', await operationState(db, failed ?? reserved, value.nonce, mode));
   }
   let result;
   try { result = interpreted(await timedInterpret(interpret, value.text, state.scene), state.scene, mode); }
@@ -193,20 +209,19 @@ async function aiCommand(db, row, value, requestHash, mode, interpret) {
     const latest = await first(db, GET_ROOM, row.id);
     const failed = latest?.busy_nonce === value.nonce ? await finishAi(db, latest, value.nonce, contents(latest).scene,
       '解释请求未能完成，没有修改场景。同一请求不会再次调用模型；可使用新请求再试。', 'failed', mode) : latest;
-    fail(503, 'INTERPRETATION_UNAVAILABLE', '这次解释未完成，场景未被修改。', failed ? publicState(failed, mode) : undefined);
+    fail(503, 'INTERPRETATION_UNAVAILABLE', '这次解释未完成，场景未被修改。', failed ? await operationState(db, failed, value.nonce, mode) : undefined);
   }
   // Re-read after the external wait: a nonce result or a newer revision takes precedence.
-  const latest = await first(db, GET_ROOM, row.id);
+  const latest = await first(db, GET_OPERATION, row.id, value.nonce);
   if (!latest || latest.expires_at <= Date.now()) fail(410, 'ROOM_EXPIRED', '这个房间已到期，解释结果未应用。');
-  const message = contents(latest).messages.find(item => item.nonce === value.nonce);
-  if (message && message.kind !== 'pending') return json(publicState(latest, mode));
+  if (latest.receipt_kind !== 'pending') return json(await operationState(db, latest, value.nonce, mode, true));
   if (latest.busy_nonce !== value.nonce || latest.revision !== reserved.revision || latest.busy_until <= Date.now()) {
     const expired = await expireBusy(db, latest);
     fail(409, 'AI_RESULT_STALE', '等待期间房间已更新或请求已超时，解释结果未应用。', publicState(expired, mode));
   }
   const updated = await finishAi(db, latest, value.nonce, result.scene, result.reply, result.kind, result.mode);
   if (!updated) fail(409, 'REVISION_CONFLICT', '房间已有更新，解释结果未覆盖它。', publicState(await first(db, GET_ROOM, row.id), mode));
-  return json(publicState(updated, result.mode));
+  return json(await operationState(db, updated, value.nonce, result.mode));
 }
 /** Same-origin guest capability API. It neither provisions tables nor reads personal credentials. */
 export async function handleRooms(request, env, {interpret, mode = interpret ? 'ai' : 'commands'} = {}) {
@@ -230,10 +245,9 @@ export async function handleRooms(request, env, {interpret, mode = interpret ? '
       return json(publicState(row, mode));
     }
     const value = await readBody(request); commandInput(value, !!undo);
-    if (!undo && Object.hasOwn(value, 'patch')) sceneInput(value.patch, true, contents(row).scene);
     const requestHash = await hash(canonical(undo ? {kind: 'undo'} : Object.hasOwn(value, 'text') ? {text: value.text} : {patch: value.patch}));
+    const previous = await replay(env.DB, row, value.nonce, requestHash, mode); if (previous) return previous;
     row = await expireBusy(env.DB, row);
-    const previous = replay(row, value.nonce, requestHash, mode); if (previous) return previous;
     writable(row, value, mode);
     const state = contents(row);
     if (undo) {
