@@ -5,10 +5,10 @@ import {createScene, updateScene, sceneChanges, SCENE_LIMITS} from '../web/scene
 import {SceneCodeError, SCENE_CODE_MAX_BYTES, SCENE_CODE_FIELDS, SCENE_LOGIC_SOURCES,
   formatSceneCode, parseSceneCode, sceneCodeDiff} from '../web/scene-code.mjs';
 
-test('formatted code contains ten canonical editable fields and roundtrips the actual scene', () => {
+test('formatted code contains fourteen canonical editable fields and roundtrips the actual scene', () => {
   const scene = updateScene(createScene(), {hour: 22, seed: 4294967295, boat: false, wind: 0.12});
   const text = formatSceneCode(scene), object = JSON.parse(text), restored = parseSceneCode(text, createScene());
-  assert.equal(SCENE_CODE_FIELDS.length, 10);
+  assert.equal(SCENE_CODE_FIELDS.length, 14);
   assert.deepEqual(Object.keys(object), Object.keys(scene).filter(key => !['schemaVersion', 'boat'].includes(key)));
   assert.equal(object.schemaVersion, undefined);
   assert.equal(object.boat, undefined); assert.equal(object.boats, 0); assert.equal(object.mountains, 2);
@@ -51,6 +51,25 @@ test('count parameters and old boat patches share the same normalized scene and 
   assert.deepEqual(parseSceneCode(formatSceneCode(legacy), legacy).scene, base);
 });
 
+test('real JSON edits validate nested placements and leaf endpoints without false diffs', () => {
+  const base = createScene();
+  const result = parseSceneCode('{"birds":5,"placements":[{"id":"bird:4","x":0.7,"y":0.2}],"leafOrigin":{"x":0.1,"y":0.3},"leafTarget":{"x":0.8,"y":0.9}}', base);
+  assert.equal(result.scene.birds, 5); assert.equal(result.scene.placements[0].id, 'bird:4');
+  assert.deepEqual(result.scene.leafOrigin, {x: 0.1, y: 0.3}); assert.deepEqual(result.scene.leafTarget, {x: 0.8, y: 0.9});
+  assert.deepEqual(sceneCodeDiff(result.scene, parseSceneCode(formatSceneCode(result.scene), result.scene).scene), []);
+  assert.deepEqual(sceneCodeDiff(base, result.scene).map(item => item.key), ['birds', 'placements', 'leafOrigin', 'leafTarget']);
+  for (const text of ['{"placements":[{"id":"bird:3","x":0.5,"y":0.2}]}', '{"leafOrigin":{"x":-0.1,"y":0.2}}',
+    '{"placements":[{"id":"boat:0","x":0.4,"y":0.7},{"id":"boat:0","x":0.5,"y":0.8}]}']) {
+    assert.throws(() => parseSceneCode(text, base), SceneCodeError);
+  }
+  const all = [];
+  for (const [kind, count] of [['tree', 100], ['boat', 8], ['mountain', 8], ['bird', 20]]) {
+    for (let index = 0; index < count; index++) all.push({id: `${kind}:${index}`, x: 0.123456, y: 0.987654});
+  }
+  const full = updateScene(base, {trees: 100, boats: 8, mountains: 8, birds: 20, placements: all});
+  assert.deepEqual(parseSceneCode(formatSceneCode(full), base).scene, full, 'largest valid pretty JSON still roundtrips');
+});
+
 test('both limits for every numeric field parse through the real model and out-of-range values reject', () => {
   const scene = createScene();
   for (const [key, limit] of Object.entries(SCENE_LIMITS)) {
@@ -89,7 +108,7 @@ test('Unicode escaped known keys are JSON, while Unicode unknown keys and values
   }
   assert.throws(() => parseSceneCode(' '.repeat(SCENE_CODE_MAX_BYTES + 1), scene),
     error => error instanceof SceneCodeError && error.code === 'SCENE_CODE_TOO_LARGE');
-  assert.throws(() => parseSceneCode('{"标题":"' + '文'.repeat(3000) + '"}', scene),
+  assert.throws(() => parseSceneCode('{"标题":"' + '文'.repeat(SCENE_CODE_MAX_BYTES) + '"}', scene),
     error => error instanceof SceneCodeError && error.code === 'SCENE_CODE_TOO_LARGE');
   assert.throws(() => parseSceneCode({}, scene), SceneCodeError);
   assert.throws(() => parseSceneCode('{}', {}), error => error.code === 'INVALID_BASE_SCENE');

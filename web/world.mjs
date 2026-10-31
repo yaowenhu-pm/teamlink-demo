@@ -1,14 +1,15 @@
 import qrcode from 'qrcode-generator';
-import {createScene,validateScene,updateScene,sceneChanges} from './scene-model.mjs';
+import {createScene,validateScene,updateScene,sceneChanges,moveSceneObject} from './scene-model.mjs';
 import {mountLandscape} from './scene-renderer.mjs';
 import {mountCodePanel} from './code-panel.mjs';
+import {mountDirectEditor} from './direct-edit.mjs';
 const $=selector=>document.querySelector(selector),$$=selector=>[...document.querySelectorAll(selector)];
 const esc=value=>String(value??'').replace(/[&<>"']/g,char=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));
 if(location.hash.startsWith('#doc='))location.replace('/legacy/app/'+location.search+location.hash);
 const STORAGE='teamlink-landscape-v1';
-let scene=createScene(),room=null,busy=false,pollTimer=null,pollDelay=1400,polling=false,localHistory=[],latestChanges=[],lastReply='',lastRequest=null;
+let scene=createScene(),room=null,busy=false,pollTimer=null,pollDelay=1400,polling=false,localHistory=[],latestChanges=[],lastReply='',lastRequest=null,writeNotBefore=0;
 let selected=null,editBefore=null,leafCompare=null,phase=0,playing=true,lastFrame=performance.now(),toastTimer,hideOpening,stageVisible=true;
-let codePanel=null,codeBefore=null,codeDraft=false,roomConnection=null,connecting=true,shareUnavailable=false,shareError='',inviteCache='',expiryTimer;
+let codePanel=null,codeBefore=null,codeDraft=false,roomConnection=null,connecting=true,shareUnavailable=false,shareError='',inviteCache='',expiryTimer,directEditor=null;
 const reduced=matchMedia('(prefers-reduced-motion: reduce)').matches;if(reduced)playing=false;
 try{const raw=localStorage.getItem(STORAGE);if(raw)scene=validateScene(JSON.parse(raw));}catch{}
 const hash=new URLSearchParams(location.hash.slice(1));
@@ -19,7 +20,7 @@ function status(text){$('#compose-status').textContent=text;}
 function quietOpening(){clearTimeout(hideOpening);$('#opening').classList.add('quiet');}
 function saveLocal(){if(!room){try{localStorage.setItem(STORAGE,JSON.stringify(scene));}catch{}}}
 function formatHour(hour){const total=Math.round((hour%24)*60);return String(Math.floor(total/60)).padStart(2,'0')+':'+String(total%60).padStart(2,'0');}
-function value(key,value){if(key==='hour')return formatHour(value);if(key==='rain'||key==='wind')return Math.round(value*100)+'%';if(key==='branchAngle')return value+'°';if(typeof value==='boolean')return value?'有':'无';return String(value);}
+function value(key,value){if(key==='hour')return formatHour(value);if(key==='rain'||key==='wind')return Math.round(value*100)+'%';if(key==='branchAngle')return value+'°';if(key==='placements')return value.length+' 个位置';if(key==='leafOrigin'||key==='leafTarget')return `${Math.round(value.x*100)}%, ${Math.round(value.y*100)}%`;if(typeof value==='boolean')return value?'有':'无';return String(value);}
 function showChanges(changes){latestChanges=changes;$('#change-chips').innerHTML=changes.map(item=>`<span>${esc(item.label)} ${esc(value(item.key,item.before))} → ${esc(value(item.key,item.after))}</span>`).join('');}
 function renderControls(){
  $('#time-label').textContent=formatHour(scene.hour);$('#hour-value').textContent=formatHour(scene.hour);$('#angle-value').textContent=scene.branchAngle+'°';$('#depth-value').textContent=scene.branchDepth;$('#wind-value').textContent=Math.round(scene.wind*100)+'%';
@@ -30,12 +31,35 @@ function renderControls(){
  $('#play-leaf').textContent=playing?'Ⅱ':'▶';
  document.body.classList.toggle('night-scene',scene.hour<6||scene.hour>=19.5);document.body.dataset.hour=String(scene.hour);document.body.dataset.trees=String(scene.trees);document.body.dataset.boats=String(scene.boats);document.body.dataset.mountains=String(scene.mountains);document.body.dataset.revision=String(room?.revision??0);
  codePanel?.update(scene,{before:codeBefore??scene,selected,busy:busy||connecting});
+ directEditor?.update(scene,{busy:busy||connecting||codeDraft});
 }
-function render(){renderer.render(scene,{phase,showTrajectory:selected==='leaf',compareScene:leafCompare});if(document.body.classList.contains('mobile-code-open'))previewRenderer.render(scene,{phase,showTrajectory:selected==='leaf',compareScene:leafCompare});renderControls();}
+function render(){renderer.render(scene,{phase,showTrajectory:selected==='leaf',compareScene:leafCompare,selectedObject:directEditor?.selectedId});if(document.body.classList.contains('mobile-code-open'))previewRenderer.render(scene,{phase,showTrajectory:selected==='leaf',compareScene:leafCompare});renderControls();}
 function inspector(kind){selected=kind;$('#inspector').hidden=!kind;$$('[data-inspector]').forEach(node=>node.hidden=node.dataset.inspector!==kind);$('#inspector-title').textContent=kind==='tree'?'这棵树怎样生长':kind==='leaf'?'把落叶的过程摊开看':'太阳与时间';if(kind==='leaf')leafCompare=scene;render();quietOpening();}
-const renderer=mountLandscape($('#landscape'),{onSunDrag(hour,dragPhase){if(busy||connecting||codeDraft)return;if(dragPhase==='start')editBefore=scene;scene=updateScene(scene,{hour});render();quietOpening();if(dragPhase==='end')finishDirect({hour});},onTreeSelect:()=>inspector('tree'),onLeafSelect:()=>inspector('leaf')});
+function objectDrag({id,point,phase:dragPhase}){
+ if(busy||connecting||codeDraft)return false;
+ if(dragPhase==='start')editBefore=scene;
+ const base=editBefore??scene,patch=moveSceneObject(base,id,point);scene=updateScene(base,patch);render();quietOpening();
+ if(dragPhase==='end')finishDirect(patch);
+}
+function trajectoryDrag({handle,point,phase:dragPhase}){
+ if(handle==='phase')return;
+ if(busy||connecting||codeDraft)return false;
+ if(dragPhase==='start')editBefore=scene;
+ const patch={[handle==='origin'?'leafOrigin':'leafTarget']:point};scene=updateScene(editBefore??scene,patch);render();quietOpening();
+ if(dragPhase==='end')finishDirect(patch);
+}
+const renderer=mountLandscape($('#landscape'),{
+ onSunDrag(hour,dragPhase){if(busy||connecting||codeDraft)return false;if(dragPhase==='start')editBefore=scene;scene=updateScene(scene,{hour});render();quietOpening();if(dragPhase==='end')finishDirect({hour});},
+ onObjectSelect({id}){directEditor?.select(id);},onObjectDrag:objectDrag,onTrajectoryDrag:trajectoryDrag,
+ onPhaseChange(value){playing=false;phase=value;render();},onTreeSelect:()=>inspector('tree'),onLeafSelect:()=>inspector('leaf')
+});
 const previewRenderer=mountLandscape($('#code-preview-landscape'));
-function animate(now){const delta=Math.min((now-lastFrame)/1000,.1);lastFrame=now;if(playing&&stageVisible&&!document.hidden){phase=(phase+delta/7)%1;renderer.render(scene,{phase,showTrajectory:selected==='leaf',compareScene:leafCompare});if(selected==='leaf'&&$('#leaf-time')!==document.activeElement)$('#leaf-time').value=String(phase);}requestAnimationFrame(animate);}
+directEditor=mountDirectEditor($('#live-stage'),{
+ getScene:()=>scene,getObjects:()=>renderer.getObjectPositions(),onCommit:patch=>finishDirect(patch),
+ onSelection(id,kind){if(kind==='tree'){inspector('tree');return;}selected=null;leafCompare=null;$('#inspector').hidden=true;render();quietOpening();},
+ onInspect(kind){if(kind==='leaf')directEditor?.select(null);inspector(kind);},onUndo:()=>$('#undo-world').click(),notify:toast
+});
+function animate(now){const delta=Math.min((now-lastFrame)/1000,.1);lastFrame=now;if(playing&&stageVisible&&!document.hidden){phase=(phase+delta/7)%1;renderer.render(scene,{phase,showTrajectory:selected==='leaf',compareScene:leafCompare,selectedObject:directEditor?.selectedId});if(selected==='leaf'&&$('#leaf-time')!==document.activeElement)$('#leaf-time').value=String(phase);}requestAnimationFrame(animate);}
 function setConnection(text,connected=false){$('#connection').textContent=text;$('#connection').classList.toggle('connected',connected);}
 function renderMessages(){
  const messages=room?.messages??[];const last=messages.at(-1);
@@ -76,7 +100,7 @@ async function ensureRoom(){
   if(room){const {data}=await request('/api/rooms/'+room.id,{timeout:10000});acceptState(data);}
   else{setConnection('正在连接…');const {data}=await request('/api/rooms',{method:'POST',body:{scene},timeout:12000});room={...data,connected:true};history.replaceState(null,'',location.pathname+location.search+'#'+new URLSearchParams({room:room.id,key:room.token}));acceptState(data);}
   clearTimeout(expiryTimer);expiryTimer=setTimeout(()=>{shareUnavailable=true;renderInvite();},Math.max(0,room.expiresAt-Date.now()));schedulePoll();
- })().catch(error=>{if(room)room.connected=false;shareUnavailable=true;renderInvite(error.message);throw error;}).finally(()=>{connecting=false;roomConnection=null;render();renderInvite();});
+ })().catch(error=>{if(room)room.connected=false;shareUnavailable=true;renderInvite(error.message);throw error;}).finally(()=>{connecting=false;roomConnection=null;render();renderInvite();updateIntroPlayback();});
  return roomConnection;
 }
 function schedulePoll(){clearTimeout(pollTimer);if(room&&!document.hidden)pollTimer=setTimeout(pollRoom,pollDelay);}
@@ -91,19 +115,19 @@ async function sendOperation(payload,undo=false,retryRequest=null){
  if(busy)return;busy=true;quietOpening();$('#retry').hidden=true;renderControls();
  const operation=retryRequest&&!retryRequest.retryAsNew?retryRequest:{payload,undo,nonce:crypto.randomUUID()};
  operation.inFlight=true;operation.retryAsNew=false;lastRequest=operation;const {nonce}=operation;
- try{await ensureRoom();operation.expectedRevision??=room.revision;const {data,status:httpStatus}=await request('/api/rooms/'+room.id+(undo?'/undo':''),{method:'POST',body:{nonce,expectedRevision:operation.expectedRevision,...operation.payload}});acceptState(data);if(httpStatus===202&&room.messages?.some(message=>message.nonce===nonce&&message.kind==='pending')){status('请求仍在处理中，正在同步实际结果。');busy=true;}else busy=false;
- }catch(error){if(error.current)acceptState(error.current);busy=false;if(error.status===409){status('风景刚在另一端变化了，已更新到最新状态。请再试这次修改。');}else{status(error.message==='The operation was aborted due to timeout'?'请求尚未确认，正在读取房间中的实际结果。':error.message);}
+ try{await ensureRoom();operation.expectedRevision??=room.revision;const wait=Math.max(0,writeNotBefore-Date.now());if(wait)await new Promise(resolve=>setTimeout(resolve,wait));writeNotBefore=Date.now()+1050;const {data,status:httpStatus}=await request('/api/rooms/'+room.id+(undo?'/undo':''),{method:'POST',body:{nonce,expectedRevision:operation.expectedRevision,...operation.payload}});acceptState(data);if(httpStatus===202&&room.messages?.some(message=>message.nonce===nonce&&message.kind==='pending')){status('请求仍在处理中，正在同步实际结果。');busy=true;}else busy=false;
+ }catch(error){if(error.current)acceptState(error.current);else if(room?.scene){scene=validateScene(room.scene);render();}busy=false;if(error.status===409){status('风景刚在另一端变化了，已更新到最新状态。请再试这次修改。');}else{status(error.message==='The operation was aborted due to timeout'?'请求尚未确认，正在读取房间中的实际结果。':error.message);}
  if(room&&(!error.status||error.status>=500)){try{const {data}=await request('/api/rooms/'+room.id,{timeout:8000});acceptState(data);busy=data.messages?.some(m=>m.nonce===nonce&&m.kind==='pending')??false;}catch{}}
  const recorded=room?.messages?.find(message=>message.nonce===nonce);
  operation.retryAsNew=error.status===409&&!recorded;
  $('#retry').hidden=busy||!!(recorded&&recorded.kind!=='pending')||!!(error.status&&error.status<500&&![409,429].includes(error.status));
- }finally{operation.inFlight=false;renderControls();schedulePoll();}
+ }finally{writeNotBefore=Math.max(writeNotBefore,Date.now()+1050);operation.inFlight=false;renderControls();schedulePoll();}
 }
 async function sendText(text){if(!text.trim()||busy||codeDraft||connecting)return;$('#instruction').value='';await sendOperation({text:text.trim()});}
 function finishDirect(patch){
  const before=editBefore??scene;editBefore=null;codeDraft=false;const next=updateScene(before,patch);const changes=sceneChanges(before,next);scene=next;if(!changes.length){render();return;}
  codeBefore=before;
- if(room){scene=before;render();sendOperation({patch});}
+ if(room){status('正在同步这次直接修改…');render();return sendOperation({patch});}
  else{localHistory.push(before);if(localHistory.length>15)localHistory.shift();saveLocal();showChanges(changes);lastReply='直接修改，结果已经在画面上。';status('当前为本机预览，重新连接后可以共享。');codePanel?.update(scene,{before,selected,resetDraft:true});render();}
 }
 for(const [id,key] of [['hour-range','hour'],['angle-range','branchAngle'],['depth-range','branchDepth'],['wind-range','wind']]){
@@ -148,6 +172,7 @@ function keyboardViewport(){const viewport=window.visualViewport;if(!viewport)re
 window.visualViewport?.addEventListener('resize',keyboardViewport);window.visualViewport?.addEventListener('scroll',keyboardViewport);$('#instruction').addEventListener('focus',quietOpening);
 
 const stage=$('#live-stage');
+stage.append($('#inspector'));
 function scrollToElement(id){const element=document.getElementById(id);element?.scrollIntoView({block:id==='experience'?'center':'start',behavior:reduced?'instant':'smooth'});}
 $$('[data-scroll]').forEach(button=>button.addEventListener('click',()=>scrollToElement(button.dataset.scroll)));
 $$('[data-start]').forEach(button=>button.addEventListener('click',()=>{scrollToElement('experience');$('#instruction').focus({preventScroll:true});quietOpening();}));
@@ -202,12 +227,12 @@ new IntersectionObserver(entries=>{stageVisible=entries[0]?.isIntersecting??true
 const introVideo=$('#intro-video');
 introVideo.defaultMuted=true;introVideo.muted=true;
 let introVisible=false,introUserPaused=false,introSystemPause=false,introPlayRequest=null;
-function introEligible(){return introVisible&&!document.hidden&&!document.body.classList.contains('controller')&&!document.body.classList.contains('focus-mode');}
+function introEligible(){return introVisible&&!connecting&&!document.hidden&&!document.body.classList.contains('controller')&&!document.body.classList.contains('focus-mode');}
 function introCaption(){if(introVideo.error){$('#intro-video-status').textContent='视频暂未加载成功，可以使用播放控件重试。';return;}$('#intro-video-status').textContent=introVideo.paused?'已暂停 · 可使用播放控件继续':introVideo.muted?'静音自动播放 · 可直接开启声音':'正在播放 · 中文字幕与原创配乐';}
 function updateIntroPlayback(){
  if(!introEligible()){if(!introVideo.paused){introSystemPause=true;introVideo.pause();}return;}
  if(introUserPaused||!introVideo.paused||introPlayRequest)return;
- introPlayRequest=introVideo.play().catch(()=>{$('#intro-video-status').textContent=introVideo.error?'视频暂未加载成功，可以使用播放控件重试。':'影片已直接展示，点击播放控件即可继续。';}).finally(()=>{introPlayRequest=null;if(!introEligible()&&!introVideo.paused){introSystemPause=true;introVideo.pause();}});
+ introVideo.autoplay=true;introPlayRequest=introVideo.play().catch(()=>{$('#intro-video-status').textContent=introVideo.error?'视频暂未加载成功，可以使用播放控件重试。':'影片已直接展示，点击播放控件即可继续。';}).finally(()=>{introPlayRequest=null;if(!introEligible()&&!introVideo.paused){introSystemPause=true;introVideo.pause();}});
 }
 introVideo.addEventListener('play',()=>{introUserPaused=false;introCaption();});
 introVideo.addEventListener('playing',introCaption);

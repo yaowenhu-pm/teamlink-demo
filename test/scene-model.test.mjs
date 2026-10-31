@@ -1,10 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { SceneModelError, SCENE_LIMITS, createScene, validateScene, updateScene,
-  sceneChanges, interpretInstruction, solarPosition, leafPath } from '../web/scene-model.mjs';
+  sceneChanges, interpretInstruction, solarPosition, leafPath, moveSceneObject, duplicateSceneObject,
+  removeSceneObject, SCENE_PLACEMENT_LIMIT } from '../web/scene-model.mjs';
 
 const defaults = { schemaVersion: 1, seed: 72, hour: 18.3, trees: 40, rain: 0,
-  wind: 0.3, branchAngle: 32, branchDepth: 5, boats: 1, mountains: 2, boat: true, flowers: 30 };
+  wind: 0.3, branchAngle: 32, branchDepth: 5, boats: 1, mountains: 2, boat: true, flowers: 30,
+  birds: 3, placements: [], leafOrigin: {x: 0.32, y: 0.24}, leafTarget: {x: 0.7, y: 0.94} };
 const apply = (text, scene = createScene()) => {
   const parsed = interpretInstruction(text, scene);
   assert.equal(parsed.supported, true, `${text}: ${parsed.reply}`);
@@ -172,15 +174,18 @@ test('leaf time is deterministic, wind changes trajectory and rain changes progr
   const rain = leafPath(updateScene(scene, { rain: 1 }));
   assert.equal(rain[15].x, original[15].x);
   assert.ok(rain[15].y > original[15].y);
-  assert.notEqual(leafPath(updateScene(scene, { seed: 73 }))[0].x, original[0].x);
+  assert.notEqual(leafPath(updateScene(scene, { seed: 73 }))[15].x, original[15].x);
   assert.deepEqual(leafPath(scene, { samples: 61 })[30], original[15], 'same time produces the same state at a different sampling density');
   for (const samples of [0, 1, 242, 2.5, NaN, '31']) assert.throws(() => leafPath(scene, { samples }), SceneModelError);
 });
 
-test('legacy scenes normalize only the two added count fields without mutating old snapshots', () => {
-  const legacy = { ...createScene() }; delete legacy.boats; delete legacy.mountains;
+test('legacy scenes normalize only known added fields without mutating old snapshots', () => {
+  const legacy = { ...createScene() };
+  for (const key of ['boats', 'mountains', 'birds', 'placements', 'leafOrigin', 'leafTarget']) delete legacy[key];
   const original = JSON.stringify(legacy), normalized = validateScene(legacy);
   assert.equal(normalized.boats, 1); assert.equal(normalized.mountains, 2); assert.equal(normalized.boat, true);
+  assert.equal(normalized.birds, 3); assert.deepEqual(normalized.placements, []);
+  assert.deepEqual(normalized.leafOrigin, defaults.leafOrigin); assert.deepEqual(normalized.leafTarget, defaults.leafTarget);
   assert.equal(Object.isFrozen(normalized), true); assert.equal(JSON.stringify(legacy), original);
   const hiddenBoat = validateScene({ ...legacy, boat: false });
   assert.equal(hiddenBoat.boats, 0); assert.equal(hiddenBoat.boat, false);
@@ -189,6 +194,114 @@ test('legacy scenes normalize only the two added count fields without mutating o
   assert.equal(validateScene(partialLegacy).mountains, 2);
   const missingRequired = { ...legacy }; delete missingRequired.boat;
   assert.throws(() => validateScene(missingRequired), SceneModelError);
+});
+
+test('placements and leaf points are deeply immutable, canonical and compared by value', () => {
+  const raw = [{id: 'bird:1', x: 0.12345678912345, y: 0.812345678912}, {id: 'boat:0', x: 0.4, y: 0.6}];
+  const scene = updateScene(createScene(), {placements: raw, leafOrigin: {x: 0.111111111, y: 0.222222222}});
+  assert.deepEqual(scene.placements, [{id: 'boat:0', x: 0.4, y: 0.6}, {id: 'bird:1', x: 0.123457, y: 0.812346}]);
+  assert.deepEqual(scene.leafOrigin, {x: 0.111111, y: 0.222222});
+  assert.ok(Object.isFrozen(scene.placements) && scene.placements.every(Object.isFrozen));
+  assert.ok(Object.isFrozen(scene.leafOrigin) && Object.isFrozen(scene.leafTarget));
+  raw[0].x = 0.9; assert.equal(scene.placements[1].x, 0.123457);
+  assert.deepEqual(sceneChanges(scene, validateScene(scene)), []);
+  assert.deepEqual(sceneChanges(scene, updateScene(scene, {})), []);
+  assert.deepEqual(sceneChanges(scene, updateScene(scene, {placements: [...scene.placements].reverse(), leafTarget: {...scene.leafTarget}})), []);
+});
+
+test('placements reject duplicate/out-of-count IDs, invalid nested types and accessor or array payloads', () => {
+  const base = createScene(), valid = {id: 'boat:0', x: 0.2, y: 0.6};
+  const cases = [null, {}, [valid, valid], [{...valid, id: 'boat:1'}], [{...valid, id: 'boat:8'}],
+    [{...valid, id: 'tree:40'}], [{...valid, id: 'bird:3'}], [{...valid, id: 'bird:20'}],
+    [{...valid, id: 'mountain:2'}], [{...valid, id: 'boat:00'}], [{...valid, id: '__proto__'}],
+    [{...valid, x: Infinity}], [{...valid, y: -0.1}], [{...valid, x: '0.2'}], [{...valid, extra: true}],
+    Array(2), Array.from({length: 137}, () => valid)];
+  let accessed = false;
+  const getterItem = {...valid}; Object.defineProperty(getterItem, 'x', {enumerable: true, get() { accessed = true; return 0.2; }}); cases.push([getterItem]);
+  const getterArray = [valid]; Object.defineProperty(getterArray, '0', {enumerable: true, get() { accessed = true; return valid; }}); cases.push(getterArray);
+  const extraArray = [valid]; extraArray.extra = true; cases.push(extraArray);
+  for (const placements of cases) assert.throws(() => updateScene(base, {placements}), SceneModelError);
+  for (const key of ['leafOrigin', 'leafTarget']) {
+    for (const point of [null, [], {x: 0.2}, {x: 0.2, y: 1.1}, {x: NaN, y: 0.3}, {x: true, y: 0.3}, {x: 0.2, y: 0.3, extra: 1}]) {
+      assert.throws(() => updateScene(base, {[key]: point}), SceneModelError);
+    }
+    const point = {y: 0.3}; Object.defineProperty(point, 'x', {enumerable: true, get() { accessed = true; return 0.2; }});
+    assert.throws(() => updateScene(base, {[key]: point}), SceneModelError);
+  }
+  assert.equal(accessed, false); assert.deepEqual(base.placements, []);
+});
+
+test('counts prune only previously valid placements and explicit invalid placements still reject', () => {
+  const placed = updateScene(createScene(), {boats: 3, placements: [
+    {id: 'boat:0', x: 0.2, y: 0.7}, {id: 'boat:2', x: 0.6, y: 0.7},
+    {id: 'tree:39', x: 0.1, y: 0.4}, {id: 'bird:2', x: 0.5, y: 0.2},
+  ]});
+  const fewer = updateScene(placed, {boats: 1, trees: 0, birds: 2});
+  assert.deepEqual(fewer.placements, [{id: 'boat:0', x: 0.2, y: 0.7}]);
+  assert.equal(placed.placements.length, 4);
+  assert.throws(() => updateScene(placed, {boats: 1, placements: placed.placements}), SceneModelError);
+  assert.deepEqual(updateScene(placed, {boat: false}).placements.map(item => item.id), ['tree:39', 'bird:2']);
+});
+
+test('moving, duplicating and deleting instances produce exact patches and preserve surviving placements', () => {
+  const base = createScene(), move = moveSceneObject(base, 'boat:0', {x: 0.4, y: 0.7});
+  assert.ok(Object.isFrozen(move) && Object.isFrozen(move.placements));
+  const moved = updateScene(base, move), duplicated = updateScene(moved, duplicateSceneObject(moved, 'boat:0'));
+  assert.equal(duplicated.boats, 2); assert.equal(duplicated.boat, true);
+  assert.deepEqual(duplicated.placements, [{id: 'boat:0', x: 0.4, y: 0.7}, {id: 'boat:1', x: 0.46, y: 0.76}]);
+  const removed = updateScene(duplicated, removeSceneObject(duplicated, 'boat:0'));
+  assert.equal(removed.boats, 1); assert.deepEqual(removed.placements, [{id: 'boat:0', x: 0.46, y: 0.76}]);
+  const empty = updateScene(removed, removeSceneObject(removed, 'boat:0'));
+  assert.equal(empty.boats, 0); assert.equal(empty.boat, false); assert.deepEqual(empty.placements, []);
+  const fromRenderer = updateScene(base, duplicateSceneObject(base, 'boat:0', {x: 0.98, y: 0.99}));
+  assert.deepEqual(fromRenderer.placements, [{id: 'boat:0', x: 0.98, y: 0.99}, {id: 'boat:1', x: 1, y: 1}]);
+  for (const [kind, countKey] of [['tree', 'trees'], ['mountain', 'mountains'], ['bird', 'birds']]) {
+    const copy = updateScene(base, duplicateSceneObject(base, `${kind}:0`, {x: 0.2, y: 0.3}));
+    assert.equal(copy[countKey], base[countKey] + 1);
+    const gone = updateScene(copy, removeSceneObject(copy, `${kind}:0`));
+    assert.equal(gone[countKey], base[countKey]);
+    assert.deepEqual(gone.placements, [{id: `${kind}:${base[countKey] - 1}`, x: 0.26, y: 0.36}]);
+  }
+  assert.throws(() => duplicateSceneObject(base, 'boat:0'), error => error.code === 'OBJECT_POSITION_REQUIRED');
+  assert.throws(() => duplicateSceneObject(updateScene(base, {boats: 8}), 'boat:0', {x: 0.2, y: 0.7}), error => error.code === 'OBJECT_LIMIT');
+  assert.throws(() => moveSceneObject(base, 'boat:1', {x: 0.2, y: 0.7}), SceneModelError);
+  assert.throws(() => removeSceneObject(base, 'bird:3'), SceneModelError);
+});
+
+test('leaf endpoints directly determine every path with stable seed, time and weather causality', () => {
+  const base = updateScene(createScene(), {leafOrigin: {x: 0.1, y: 0.2}, leafTarget: {x: 0.9, y: 0.8}});
+  const path = leafPath(base), windy = leafPath(updateScene(base, {wind: 1})), rainy = leafPath(updateScene(base, {rain: 1}));
+  for (const value of [path, windy, rainy]) {
+    assert.deepEqual({x: value[0].x, y: value[0].y}, base.leafOrigin);
+    assert.deepEqual({x: value.at(-1).x, y: value.at(-1).y}, base.leafTarget);
+  }
+  assert.notEqual(path[15].x, windy[15].x); assert.ok(rainy[15].y > path[15].y);
+  assert.deepEqual(path, leafPath(validateScene(base)));
+  assert.deepEqual(path[15], leafPath(base, {samples: 61})[30]);
+  assert.notEqual(path[15].x, leafPath(updateScene(base, {leafTarget: {x: 0.4, y: 0.8}}))[15].x);
+});
+
+test('all 136 placements normalize drag precision and fit the unchanged 8KB room request bound', () => {
+  const placements = [];
+  for (const [kind, count] of [['tree', 100], ['boat', 8], ['mountain', 8], ['bird', 20]]) {
+    for (let index = 0; index < count; index++) placements.push({id: `${kind}:${index}`, x: 0.12345678912345678, y: 0.9876543219876543});
+  }
+  assert.equal(placements.length, SCENE_PLACEMENT_LIMIT);
+  const scene = updateScene(createScene(), {trees: 100, boats: 8, mountains: 8, birds: 20, placements});
+  assert.equal(scene.placements[0].x, 0.123457); assert.equal(scene.placements[0].y, 0.987654);
+  const creation = JSON.stringify({scene}), patch = {...scene}; delete patch.schemaVersion;
+  const operation = JSON.stringify({nonce: 'n'.repeat(80), expectedRevision: Number.MAX_SAFE_INTEGER, patch});
+  assert.ok(new TextEncoder().encode(creation).byteLength < 8192);
+  assert.ok(new TextEncoder().encode(operation).byteLength < 8192);
+});
+
+test('bird counts retain atomic finite-language behavior', () => {
+  for (const [text, expected] of [['增加两只鸟', 5], ['鸟少一只', 2], ['没有鸟', 0], ['add two birds', 5], ['more birds', 5], ['set birds to twenty', 20]]) {
+    assert.equal(apply(text).birds, expected, text);
+  }
+  for (const text of ['鸟21只', '增加二十只鸟', 'add two birds and generate a new app']) {
+    assert.equal(interpretInstruction(text, createScene()).supported, false, text);
+  }
 });
 
 test('boat compatibility derives one canonical count and rejects explicitly contradictory patches', () => {

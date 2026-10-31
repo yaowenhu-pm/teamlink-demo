@@ -136,7 +136,7 @@ def base_frame(t):
         center(draw, '无需安装，无需登录。打开网页，亲手试一试。', 450+lift, 22, MUTED)
         draw.rounded_rectangle((605, 540+lift, 995, 605+lift), 33, fill='#28486c')
         center(draw, '现在，开始共创  ↗', 557+lift, 23, '#ffffff')
-        center(draw, 'teamlink-handoff.yaowen-hu.chatgpt.site', 692, 19, '#7c97b7', True)
+        center(draw, 'teamlink.yaowenhu.cn', 692, 19, '#7c97b7', True)
         center(draw, 'TeamLink  /  A shared space for imagination.', 801, 12, '#9bacc0', True)
     return canvas
 

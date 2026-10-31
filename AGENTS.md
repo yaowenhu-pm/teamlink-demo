@@ -7,21 +7,24 @@ Do not simulate synchronization, model responses, online members or completed wo
 
 ## Source and hosting
 
-- Author browser files in `web/`, server files in `worker/`, and schema in
+- Author browser files in `web/`, portable API files in `worker/`, the Node host in `server/`, and schema in
   `db/schema.ts`. Keep generated Drizzle SQL and metadata in `drizzle/`.
-- `npm run build` embeds frontend assets in the Worker and generates `dist/`,
-  including `.openai/hosting.json` and `.openai/drizzle`. Do not hand-edit `dist/`.
-- Preserve the existing hosted Sites project identity, repository, audience and DB
-  binding. The Sites owner handles source synchronization and publication. Public
-  mirrors use the hosting example rather than private deployment identity.
-  GitHub Pages is a static entry; shared room APIs run on the Sites origin.
+- `npm run build` bundles browser files and same-origin media into `build/public/`.
+  Do not hand-edit generated build output. Node.js 24 and SQLite run the primary site
+  at `https://teamlink.yaowenhu.cn` on the user's Aliyun server.
+- Preserve other sites on that server and existing apex/www/beauty/reader/ops DNS.
+  Use isolated TeamLink releases, runtime, systemd service, database and Nginx vhost.
+  Do not publish future updates to Sites by default. Keep its previous identity only
+  as historical configuration; GitHub Pages should direct visitors to the primary domain.
+- `npm run build:sites` retains the historical Worker build for compatibility.
 - Generate migrations with `npm run db:generate`. Keep them bounded and schema-only;
   append rather than editing applied history. Never create or alter tables from
   visitor request handlers.
 
 ## Shared rooms and model calls
 
-- D1 is the shared source of truth. Preserve capability authorization, same-origin
+- The deployed SQLite database is the shared source of truth through the D1-compatible
+  adapter. Preserve capability authorization, same-origin
   writes, payload limits, nonce idempotency and revision CAS. A stale response must
   not overwrite a newer scene.
 - Preserve six-hour expiry, bounded messages/history, creation limits, per-room AI
@@ -52,8 +55,8 @@ do not claim the legacy tool automatically shares a live document.
 ## Verification
 
 Use Node.js 24. Run npm test, source syntax checks and npm run build; tests must use
-fixtures and must not call paid providers or require real secrets. Verify local D1
-through Wrangler, then check the published browser path: one device creates a
+fixtures and must not call paid providers or require real secrets. Verify local SQLite
+through the Node/SQLite host, then check the published browser path: one device creates a
 room, a second device opens its QR, and a successful message changes the same
 scene on both. Cover direct editing, failure, expiry, conflicts and mobile layout.
 Unit tests, API checks or a successful build alone do not prove that physical QR

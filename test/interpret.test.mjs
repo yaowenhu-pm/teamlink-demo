@@ -100,10 +100,27 @@ test('unknown schema/code fields, bad numeric types/bounds and unsupported patch
   const patches = [{ unknown: 1 }, { code: 'eval(1)' }, { schemaVersion: 1 }, { hour: '22' }, { trees: 2.5 },
     { trees: 101 }, { flowers: -1 }, { rain: 2 }, { wind: null }, { branchAngle: 4 }, { branchDepth: 9 },
     { boat: 1 }, { boats: 9 }, { boats: 0, boat: true }, { boats: 2, boat: false }, { mountains: -1 },
-    { mountains: 2.5 }, { boats: '3' }, { seed: 4294967296 }, JSON.parse('{"__proto__":{"polluted":true}}')];
+    { mountains: 2.5 }, { boats: '3' }, { birds: 21 }, { birds: 1.5 },
+    { placements: [{id: 'boat:0', x: 0.4, y: 0.7}] }, { leafOrigin: {x: 0.2, y: 0.3} },
+    { leafTarget: {x: 0.8, y: 0.9} }, { seed: 4294967296 }, JSON.parse('{"__proto__":{"polluted":true}}')];
   for (const patch of patches) await assert.rejects(createInterpreter(ENV, { fetcher: gateway(modelResult(patch)) })('夜晚', createScene()), code('BAD_MODEL_RESULT'));
   await assert.rejects(createInterpreter(ENV, { fetcher: gateway({ supported: false, patch: { hour: 22 }, reply: '不能执行。' }) })('夜晚', createScene()), code('BAD_MODEL_RESULT'));
   assert.equal({}.polluted, undefined);
+});
+
+test('AI changes only bird count while stale placement cleanup is computed by the model', async () => {
+  const base = updateScene(createScene(), {placements: [{id: 'bird:2', x: 0.6, y: 0.2}]});
+  let prompt;
+  const interpret = createInterpreter(ENV, {fetcher: async (_url, options) => {
+    prompt = JSON.parse(options.body).messages[0].content;
+    return Response.json(completion(modelResult({birds: 0})));
+  }});
+  const result = await interpret('不要鸟', base);
+  assert.deepEqual(result.patch, {birds: 0, placements: []});
+  assert.deepEqual(result.changes.map(item => item.key), ['birds', 'placements']);
+  assert.match(prompt, /birds 整数 0–20/); assert.match(prompt, /禁止在 patch 返回这三个字段/);
+  assert.deepEqual(updateScene(base, result.patch).placements, []);
+  assert.equal(base.placements.length, 1);
 });
 
 test('AI count patches and tree removal use real normalized values and bounded parameters', async () => {

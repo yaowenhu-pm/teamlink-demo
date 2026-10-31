@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {createScene, updateScene} from '../web/scene-model.mjs';
-import {layoutSceneObjects} from '../web/scene-renderer.mjs';
+import {layoutSceneObjects, sceneCameraPoint, resolveSceneObjectAnchor, dragSceneObjectPoint, trajectoryPhaseAt} from '../web/scene-renderer.mjs';
 
 const full = {left: 0, right: 1600, top: 0, bottom: 1000};
 const viewports = [
@@ -80,4 +80,41 @@ test('packed mountain ranges never relocate a template whose coast was cut by th
   }
   assert.equal(layoutSceneObjects(updateScene(createScene(), {mountains: 1})).mountains[0].template, 'left');
   assert.deepEqual(layoutSceneObjects(createScene()).mountains.map(item => item.template), ['left', 'right']);
+});
+
+test('placements mean the same camera-relative location across desktop, phone and repeated renders', () => {
+  const scene=updateScene(createScene(),{placements:[{id:'boat:0',x:.27,y:.61},{id:'tree:0',x:.4,y:.8}]});
+  for(const viewport of viewports){
+    const fallback={x:970,y:708},anchor=resolveSceneObjectAnchor(scene,'boat:0',fallback,viewport);
+    const point=sceneCameraPoint(viewport,anchor);
+    assert.ok(Math.abs(point.x-.27)<1e-10&&Math.abs(point.y-.61)<1e-10);
+    assert.deepEqual(resolveSceneObjectAnchor(scene,'boat:0',anchor,viewport),anchor,'a second render cannot add the drag delta again');
+    assert.deepEqual(resolveSceneObjectAnchor(scene,'mountain:0',fallback,viewport),fallback,'unplaced artwork retains its default anchor');
+  }
+});
+
+test('object dragging retains the original grab offset and clamps only at camera edges', () => {
+  const viewport=viewports[3],anchor={x:800,y:700},grab={x:818,y:691};
+  assert.deepEqual(dragSceneObjectPoint(viewport,anchor,grab,grab),sceneCameraPoint(viewport,anchor),'pointerdown cannot jump the object');
+  const moved=dragSceneObjectPoint(viewport,anchor,grab,{x:858,y:721});
+  assert.deepEqual(moved,sceneCameraPoint(viewport,{x:840,y:730}));
+  assert.deepEqual(dragSceneObjectPoint(viewport,anchor,grab,{x:-10000,y:10000}),{x:0,y:1});
+});
+
+test('birds have stable individual anchors for every supported quantity and mobile camera', () => {
+  for(const viewport of viewports)for(let count=0;count<=20;count++){
+    const scene=updateScene(createScene(),{birds:count}),layout=layoutSceneObjects(scene,viewport);
+    assert.equal(layout.birds.length,count);assert.equal(new Set(layout.birds.map(item=>item.id)).size,count);
+    assert.deepEqual(layoutSceneObjects(scene,viewport).birds,layout.birds);
+    for(const bird of layout.birds)assert.ok(bird.x>viewport.left&&bird.x<viewport.right&&bird.y>viewport.top&&bird.y<viewport.bottom);
+  }
+});
+
+test('phase dragging projects to the actual piecewise trajectory with screen-distance weighting', () => {
+  const points=[{t:0,x:.1,y:.2},{t:.5,x:.5,y:.2},{t:1,x:.5,y:.8}];
+  const horizontal=trajectoryPhaseAt(points,{x:.3,y:.24});
+  assert.ok(Math.abs(horizontal.t-.25)<1e-10);assert.ok(Math.abs(horizontal.point.x-.3)<1e-10);
+  assert.equal(horizontal.point.y,.2);
+  assert.deepEqual(trajectoryPhaseAt(points,{x:.5,y:.8}),{t:1,point:{x:.5,y:.8}});
+  assert.ok(Object.isFrozen(horizontal)&&Object.isFrozen(horizontal.point));
 });

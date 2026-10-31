@@ -44,6 +44,20 @@
 @media(max-width:600px){.quick-share{grid-template-columns:120px minmax(0,1fr);min-height:156px;gap:15px}.inline-qr-open{width:120px;height:120px}.quick-share-copy small{font-size:8px}.quick-share-copy p{font-size:9px}.code-hidden .quick-share{grid-template-columns:120px minmax(0,1fr)}}
 
 
+/* Direct editing stays inside the canvas, including its fullscreen top layer. */
+.canvas-tools{position:absolute;top:16px;left:16px;z-index:14;display:flex;gap:5px;align-items:center;padding:5px;border-radius:12px;background:#f5faf2db;box-shadow:0 4px 24px #173b4c14;backdrop-filter:blur(16px);color:#315668;font-size:11px}
+.canvas-tools button,.object-tools button{font:inherit;color:inherit;border:0;border-radius:7px;padding:8px 11px;background:transparent;cursor:pointer;white-space:nowrap;min-height:34px}
+.canvas-tools button:hover,.object-tools button:hover{background:#bed4da60}.canvas-tools button:disabled,.object-tools button:disabled{opacity:.35;cursor:default}
+.canvas-tools button:focus-visible,.object-tools button:focus-visible{outline:2px solid #2585ce;outline-offset:2px}
+.canvas-add-menu{position:absolute;top:calc(100% + 7px);left:0;background:#f7faf5f2;padding:6px;box-shadow:0 8px 30px #173b4c24;border-radius:10px;display:flex;gap:3px}
+.object-tools{position:absolute;left:50%;bottom:18px;transform:translateX(-50%);z-index:15;display:flex;align-items:center;gap:2px;max-width:calc(100% - 26px);padding:6px;border-radius:12px;background:#f5faf2ed;box-shadow:0 6px 30px #173b4c22;backdrop-filter:blur(16px);color:#315668;font-size:11px;overflow-x:auto;scrollbar-width:none}
+.object-tools-label{padding:0 9px;white-space:nowrap;font-size:10px;color:#65818a}.canvas-add-menu[hidden],.object-tools[hidden]{display:none!important}
+#workbench #live-stage>.inspector:not([hidden]){position:absolute;left:18px;bottom:70px;width:265px;max-width:calc(100% - 36px);max-height:calc(100% - 135px);overflow:auto;border:1px solid #f3faf3b3;border-radius:14px;padding:17px;background:#f8fbf2ed;backdrop-filter:blur(18px);box-shadow:0 8px 32px #173b4c22;z-index:16}
+body.focus-mode #workbench #live-stage>.inspector:not([hidden]){display:block!important}
+body.focus-mode #live-stage .canvas-tools{opacity:0;transition:opacity .25s;pointer-events:none}
+body.focus-mode #live-stage.presentation-ui-visible .canvas-tools,body.focus-mode #live-stage.has-object-selection .canvas-tools,body.focus-mode #live-stage .canvas-tools:focus-within{opacity:1;pointer-events:auto}
+@media(max-width:600px){.canvas-tools{top:12px;left:12px;font-size:10px}.canvas-tools button,.object-tools button{padding:7px 9px;min-height:38px}.object-tools{bottom:13px;font-size:10px}.object-tools-label{font-size:9px;padding-inline:6px}#workbench #live-stage>.inspector:not([hidden]){left:13px;bottom:66px;padding:14px}}
+
 /* Only the landscape enters the browser's fullscreen top layer. */
 .presentation-tools{display:none}
 body.focus-mode #workbench{overflow:hidden;height:100dvh}

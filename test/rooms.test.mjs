@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {DatabaseSync} from 'node:sqlite';
 import {handleRooms, ROOM_LIMITS} from '../worker/rooms.mjs';
-import {createScene, updateScene} from '../web/scene-model.mjs';
+import {createScene, updateScene, moveSceneObject, duplicateSceneObject, removeSceneObject} from '../web/scene-model.mjs';
 
 // Use real SQLite to execute production SQL; only the asynchronous D1 call shape is adapted.
 class SqliteD1 {
@@ -134,12 +134,15 @@ test('legacy room rows and undo snapshots normalize counts without dropping old 
     const env = environment();
     try {
       const room = await created(env);
-      const legacy = { ...createScene() }; delete legacy.boats; delete legacy.mountains;
+      const legacy = { ...createScene() };
+      for (const key of ['boats', 'mountains', 'birds', 'placements', 'leafOrigin', 'leafTarget']) delete legacy[key];
       const legacyHidden = { ...legacy, boat: false };
       env.DB.database.prepare('UPDATE rooms SET scene_json = ?, history_json = ? WHERE id = ?')
         .run(JSON.stringify(legacy), JSON.stringify([legacyHidden]), room.id);
       let response = await handleRooms(request(route(room), {token: room.token}), env), state = await response.json();
       assert.equal(response.status, 200); assert.equal(state.scene.boats, 1); assert.equal(state.scene.mountains, 2);
+      assert.equal(state.scene.birds, 3); assert.deepEqual(state.scene.placements, []);
+      assert.deepEqual(state.scene.leafOrigin, {x: 0.32, y: 0.24});
       response = await post(env, room, {nonce: 'new-counts', expectedRevision: 0, patch: {boats: 3, mountains: 5, trees: 0}});
       state = await response.json(); assert.equal(response.status, 200);
       assert.equal(state.scene.boats, 3); assert.equal(state.scene.mountains, 5); assert.equal(state.scene.boat, true);
@@ -154,6 +157,33 @@ test('legacy room rows and undo snapshots normalize counts without dropping old 
       assert.equal(state.scene.boats, 0); assert.equal(state.scene.boat, false); assert.equal(state.scene.mountains, 2);
       assert.deepEqual(state.messages.at(-1).changes, [{key: 'boats', label: '帆船数量', before: 1, after: 0}]);
       assert.equal(JSON.parse(env.DB.row(room.id).history_json).length, 0);
+    } finally { env.DB.close(); }
+  });
+});
+
+test('actual room patches preserve moved objects, duplicate/delete identity and leaf edits across undo', async () => {
+  await clock(async advance => {
+    const env = environment();
+    try {
+      const room = await created(env); let state = room, number = 0;
+      const applyPatch = async patch => {
+        const response = await post(env, room, {nonce: `direct-object-${number++}`, expectedRevision: state.revision, patch});
+        state = await response.json(); assert.equal(response.status, 200); advance(); return state;
+      };
+      await applyPatch(moveSceneObject(state.scene, 'boat:0', {x: 0.4, y: 0.7}));
+      await applyPatch(duplicateSceneObject(state.scene, 'boat:0'));
+      assert.equal(state.scene.boats, 2);
+      const duplicated = state.scene;
+      await applyPatch({...moveSceneObject(state.scene, 'bird:1', {x: 0.5, y: 0.1}), leafOrigin: {x: 0.2, y: 0.3}, leafTarget: {x: 0.8, y: 0.85}});
+      const movedLeaf = state.scene;
+      await applyPatch(removeSceneObject(state.scene, 'boat:0'));
+      assert.equal(state.scene.boats, 1);
+      assert.deepEqual(state.scene.placements.find(item => item.id === 'boat:0'), {id: 'boat:0', x: 0.46, y: 0.76});
+      let response = await post(env, room, {nonce: 'undo-object-delete', expectedRevision: state.revision}, undefined, '/undo');
+      state = await response.json(); assert.equal(response.status, 200); assert.deepEqual(state.scene, movedLeaf); advance();
+      response = await post(env, room, {nonce: 'undo-leaf-edit', expectedRevision: state.revision}, undefined, '/undo');
+      state = await response.json(); assert.equal(response.status, 200); assert.deepEqual(state.scene, duplicated);
+      assert.deepEqual(state.scene.leafTarget, {x: 0.7, y: 0.94});
     } finally { env.DB.close(); }
   });
 });

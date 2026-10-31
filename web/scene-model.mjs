@@ -5,6 +5,7 @@ export const SCENE_LIMITS = Object.freeze({
   trees: Object.freeze({ min: 0, max: 100, integer: true }),
   boats: Object.freeze({ min: 0, max: 8, integer: true }),
   mountains: Object.freeze({ min: 0, max: 8, integer: true }),
+  birds: Object.freeze({ min: 0, max: 20, integer: true }),
   rain: Object.freeze({ min: 0, max: 1 }),
   wind: Object.freeze({ min: 0, max: 1 }),
   branchAngle: Object.freeze({ min: 5, max: 80 }),
@@ -13,13 +14,17 @@ export const SCENE_LIMITS = Object.freeze({
 });
 
 const DEFAULT_SCENE = Object.freeze({ schemaVersion: 1, seed: 72, hour: 18.3, trees: 40,
-  rain: 0, wind: 0.3, branchAngle: 32, branchDepth: 5, boats: 1, mountains: 2, boat: true, flowers: 30 });
+  rain: 0, wind: 0.3, branchAngle: 32, branchDepth: 5, boats: 1, mountains: 2, boat: true, flowers: 30,
+  birds: 3, placements: Object.freeze([]), leafOrigin: Object.freeze({ x: 0.32, y: 0.24 }), leafTarget: Object.freeze({ x: 0.7, y: 0.94 }) });
 const LABELS = Object.freeze({ seed: '场景种子', hour: '时间', trees: '树木', rain: '雨量', wind: '风力',
-  branchAngle: '树枝角度', branchDepth: '树枝层数', boats: '帆船数量', mountains: '山峰数量', boat: '帆船', flowers: '花朵' });
+  branchAngle: '树枝角度', branchDepth: '树枝层数', boats: '帆船数量', mountains: '山峰数量', boat: '帆船', flowers: '花朵',
+  birds: '飞鸟数量', placements: '对象位置', leafOrigin: '落叶起点', leafTarget: '落叶终点' });
 const FIELDS = Object.keys(DEFAULT_SCENE);
 const EDITABLE_FIELDS = FIELDS.filter((key) => key !== 'schemaVersion');
 const CANONICAL_FIELDS = EDITABLE_FIELDS.filter((key) => key !== 'boat');
-const LEGACY_OPTIONAL_FIELDS = ['boats', 'mountains'];
+const LEGACY_OPTIONAL_FIELDS = ['boats', 'mountains', 'birds', 'placements', 'leafOrigin', 'leafTarget'];
+const OBJECT_COUNTS = Object.freeze({ tree: 'trees', boat: 'boats', mountain: 'mountains', bird: 'birds' });
+export const SCENE_PLACEMENT_LIMIT = 136;
 const own = (object, key) => Object.prototype.hasOwnProperty.call(object, key);
 const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
 const rounded = (value) => Math.round(value * 1e6) / 1e6;
@@ -42,6 +47,8 @@ function assertRecord(value, label) {
 }
 
 function assertValue(key, value) {
+  if (key === 'placements') { checkedPlacements(value); return; }
+  if (key === 'leafOrigin' || key === 'leafTarget') { checkedPoint(value, LABELS[key]); return; }
   if (key === 'schemaVersion') {
     if (value !== 1) throw new SceneModelError('仅支持场景版本 1。');
     return;
@@ -57,7 +64,46 @@ function assertValue(key, value) {
   }
 }
 
-export function createScene() { return Object.freeze({ ...DEFAULT_SCENE }); }
+function checkedPoint(value, label = '位置') {
+  assertRecord(value, label);
+  if (Object.keys(value).length !== 2 || !own(value, 'x') || !own(value, 'y')) throw new SceneModelError(`${label}只能包含 x 和 y。`);
+  for (const key of ['x', 'y']) if (typeof value[key] !== 'number' || !Number.isFinite(value[key]) || value[key] < 0 || value[key] > 1) {
+    throw new SceneModelError(`${label}的 x、y 必须为 0–1 之间的有限数字。`);
+  }
+  return Object.freeze({ x: rounded(value.x), y: rounded(value.y) });
+}
+
+function objectIdentity(id, scene) {
+  const match = typeof id === 'string' && id.match(/^(tree|boat|mountain|bird):(0|[1-9]\d?)$/u);
+  if (!match) throw new SceneModelError('对象编号无效。', 'INVALID_OBJECT');
+  const kind = match[1], index = Number(match[2]), countKey = OBJECT_COUNTS[kind];
+  if (index >= SCENE_LIMITS[countKey].max || (scene && index >= scene[countKey])) {
+    throw new SceneModelError('对象编号超出当前数量。', 'INVALID_OBJECT');
+  }
+  return { kind, index, countKey };
+}
+
+function checkedPlacements(value, scene) {
+  if (!Array.isArray(value) || Object.getPrototypeOf(value) !== Array.prototype || value.length > SCENE_PLACEMENT_LIMIT ||
+      Reflect.ownKeys(value).length !== value.length + 1) throw new SceneModelError('对象位置必须为不超过 136 项的稠密数组。');
+  const ids = new Set(), copy = [];
+  for (let index = 0; index < value.length; index++) {
+    const descriptor = Object.getOwnPropertyDescriptor(value, String(index));
+    if (!descriptor?.enumerable || !own(descriptor, 'value')) throw new SceneModelError('对象位置数组只能包含普通数据。');
+    const item = descriptor.value; assertRecord(item, '对象位置');
+    if (Object.keys(item).length !== 3 || !['id', 'x', 'y'].every((key) => own(item, key))) throw new SceneModelError('对象位置只能包含 id、x、y。');
+    objectIdentity(item.id, scene);
+    if (ids.has(item.id)) throw new SceneModelError('对象位置编号不能重复。');
+    ids.add(item.id);
+    const point = checkedPoint({ x: item.x, y: item.y });
+    copy.push(Object.freeze({ id: item.id, ...point }));
+  }
+  const kinds = Object.keys(OBJECT_COUNTS);
+  copy.sort((a, b) => { const one = objectIdentity(a.id), two = objectIdentity(b.id); return kinds.indexOf(one.kind) - kinds.indexOf(two.kind) || one.index - two.index; });
+  return Object.freeze(copy);
+}
+
+export function createScene() { return validateScene(DEFAULT_SCENE); }
 
 /** Reject unknown, missing, inherited, accessor and non-finite fields; return a frozen copy. */
 export function validateScene(scene) {
@@ -68,9 +114,11 @@ export function validateScene(scene) {
   const copy = {};
   for (const key of FIELDS) {
     const value = own(scene, key) ? scene[key] : key === 'boats' ? (scene.boat ? 1 : 0) : DEFAULT_SCENE[key];
-    assertValue(key, value); copy[key] = value;
+    assertValue(key, value);
+    copy[key] = key === 'placements' ? checkedPlacements(value) : key === 'leafOrigin' || key === 'leafTarget' ? checkedPoint(value, LABELS[key]) : value;
   }
   if (copy.boat !== (copy.boats > 0)) throw new SceneModelError('帆船显示状态必须与帆船数量一致。');
+  for (const placement of copy.placements) objectIdentity(placement.id, copy);
   return Object.freeze(copy);
 }
 
@@ -87,19 +135,56 @@ export function updateScene(scene, patch) {
   const next = { ...current, ...patch };
   if (own(patch, 'boats')) next.boat = patch.boats > 0;
   else if (own(patch, 'boat')) next.boats = patch.boat ? Math.max(1, current.boats) : 0;
+  if (!own(patch, 'placements')) next.placements = current.placements.filter((item) => {
+    const { index, countKey } = objectIdentity(item.id); return index < next[countKey];
+  });
   return validateScene(next);
 }
 
 export function sceneChanges(before, after) {
   const a = validateScene(before), b = validateScene(after);
-  return Object.freeze(CANONICAL_FIELDS.filter((key) => a[key] !== b[key])
+  return Object.freeze(CANONICAL_FIELDS.filter((key) => typeof a[key] === 'object' ? JSON.stringify(a[key]) !== JSON.stringify(b[key]) : a[key] !== b[key])
     .map((key) => Object.freeze({ key, label: LABELS[key], before: a[key], after: b[key] })));
+}
+
+/** Pure patches: persist them through updateScene, including the usual room revision/undo path. */
+export function moveSceneObject(scene, id, point) {
+  const current = validateScene(scene); objectIdentity(id, current);
+  const checked = checkedPoint(point);
+  const placements = checkedPlacements([...current.placements.filter((item) => item.id !== id), { id, ...checked }], current);
+  return Object.freeze({ placements });
+}
+
+/** An unplaced object needs its rendered center so duplication never invents its original position. */
+export function duplicateSceneObject(scene, id, point) {
+  const current = validateScene(scene), { kind, countKey } = objectIdentity(id, current);
+  const count = current[countKey];
+  if (count >= SCENE_LIMITS[countKey].max) throw new SceneModelError('当前对象数量已达到上限。', 'OBJECT_LIMIT');
+  const original = current.placements.find((item) => item.id === id);
+  if (!original && point === undefined) throw new SceneModelError('复制前需要提供对象在画布中的当前位置。', 'OBJECT_POSITION_REQUIRED');
+  const position = original ? checkedPoint({ x: original.x, y: original.y }) : checkedPoint(point);
+  const placements = [...current.placements];
+  if (!original) placements.push({ id, ...position });
+  placements.push({ id: `${kind}:${count}`, x: rounded(clamp(position.x + 0.06, 0, 1)), y: rounded(clamp(position.y + 0.06, 0, 1)) });
+  const next = updateScene(current, { [countKey]: count + 1, placements });
+  return Object.freeze({ [countKey]: next[countKey], placements: next.placements });
+}
+
+export function removeSceneObject(scene, id) {
+  const current = validateScene(scene), { kind, index, countKey } = objectIdentity(id, current);
+  const placements = current.placements.filter((item) => item.id !== id).map((item) => {
+    const identity = objectIdentity(item.id);
+    return identity.kind === kind && identity.index > index ? { ...item, id: `${kind}:${identity.index - 1}` } : item;
+  });
+  const next = updateScene(current, { [countKey]: current[countKey] - 1, placements });
+  return Object.freeze({ [countKey]: next[countKey], placements: next.placements });
 }
 
 // Only decimal literals and common Chinese integer forms are accepted. No expressions or code.
 const NUM = '[-+]?(?:\\d+(?:\\.\\d+)?|[零〇一二两三四五六七八九十百千]+)';
 function number(value) {
-  const english = { zero: 0, one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10, a: 1, an: 1 };
+  const english = { zero: 0, one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10,
+    eleven: 11, twelve: 12, thirteen: 13, fourteen: 14, fifteen: 15, sixteen: 16, seventeen: 17, eighteen: 18, nineteen: 19, twenty: 20, a: 1, an: 1 };
   if (own(english, value)) return english[value];
   if (/^[-+]?\d+(?:\.\d+)?$/.test(value)) return Number(value);
   const digits = { 零: 0, 〇: 0, 一: 1, 二: 2, 两: 2, 三: 3, 四: 4, 五: 5, 六: 6, 七: 7, 八: 8, 九: 9 };
@@ -128,10 +213,11 @@ function relative(scene, key, amount) {
   return { [key]: rounded(clamp(scene[key] + amount, min, max)) };
 }
 
-const COUNT_NUM = `(?:${NUM}|zero|one|two|three|four|five|six|seven|eight|nine|ten|a|an)`;
+const COUNT_NUM = `(?:${NUM}|zero|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty|a|an)`;
 const COUNT_OBJECTS = Object.freeze([
   { key: 'boats', chinese: '(?:帆船|小船|船)', measure: '(?:艘|只|条)', english: '(?:sailboats?|boats?)' },
   { key: 'mountains', chinese: '(?:山峰|山脉|高山|山)', measure: '(?:座|个)', english: 'mountains?' },
+  { key: 'birds', chinese: '(?:飞鸟|小鸟|鸟)', measure: '(?:只)', english: 'birds?' },
 ]);
 const TREE_OBJECT = { key: 'trees', chinese: '(?:树木|树)', measure: '(?:棵)', english: 'trees?' };
 function removesAll(clause, { chinese: object, english }) {
@@ -224,7 +310,7 @@ function parseClause(raw, scene) {
 
 function unsupported(reason) {
   return Object.freeze({ supported: false, patch: Object.freeze({}), changes: Object.freeze([]),
-    reply: `本地调景规则未执行：${reason} 可试「改成夜晚，树多一点，增加两艘船」；目前支持时间、太阳高低、树花船山数量、移除全部树、雨、风和树枝角度/层数。` });
+    reply: `本地调景规则未执行：${reason} 可试「改成夜晚，树多一点，增加两只鸟」；目前支持时间、太阳高低、树花船山鸟数量、移除全部树、雨、风和树枝角度/层数。` });
 }
 
 /** Complete clause matching is intentional: no silent partial application of unknown instructions. */
@@ -244,7 +330,7 @@ export function interpretInstruction(text, scene) {
   }
   const changes = sceneChanges(scene, current);
   const patch = Object.freeze(Object.fromEntries(changes.map(({ key, after }) => [key, after])));
-  const summary = changes.map(({ label, after }) => `${label}→${typeof after === 'boolean' ? (after ? '显示' : '隐藏') : after}`).join('，');
+  const summary = changes.map(({ label, after }) => `${label}→${typeof after === 'object' ? '已更新' : typeof after === 'boolean' ? (after ? '显示' : '隐藏') : after}`).join('，');
   return Object.freeze({ supported: true, patch, changes,
     reply: `本地调景规则已执行：${summary || '当前场景已符合指令，无需更改'}。` });
 }
@@ -265,12 +351,14 @@ export function leafPath(scene, { samples = 31 } = {}) {
   let state = value.seed >>> 0;
   const random = () => { state = (Math.imul(1664525, state) + 1013904223) >>> 0; return state / 4294967296; };
   const phase = random() * Math.PI * 2, frequency = 1.4 + random() * 0.8;
-  const origin = 0.28 + random() * 0.1;
+  const origin = value.leafOrigin, target = value.leafTarget;
   return Object.freeze(Array.from({ length: samples }, (_, index) => {
     const t = index / (samples - 1);
-    const sway = Math.sin(t * frequency * Math.PI * 2 + phase) * (0.012 + value.wind * 0.065) * t;
-    return Object.freeze({ t: rounded(t), x: rounded(clamp(origin + value.wind * 0.38 * t + sway, 0.02, 0.98)),
-      y: rounded(0.24 + 0.7 * Math.pow(t, 0.9 - value.rain * 0.3)),
+    const envelope = Math.sin(Math.PI * t);
+    const sway = Math.sin(t * frequency * Math.PI * 2 + phase) * (0.012 + value.wind * 0.065) * envelope;
+    const x = index === 0 ? origin.x : index === samples - 1 ? target.x : rounded(clamp(origin.x + (target.x - origin.x) * t + value.wind * 0.18 * envelope + sway, 0, 1));
+    const y = index === 0 ? origin.y : index === samples - 1 ? target.y : rounded(clamp(origin.y + (target.y - origin.y) * Math.pow(t, 0.9 - value.rain * 0.3), 0, 1));
+    return Object.freeze({ t: rounded(t), x, y,
       rotation: rounded(Math.sin(t * frequency * Math.PI * 2 + phase) * (10 + value.wind * 55) * t + t * value.wind * 90) });
   }));
 }

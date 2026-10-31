@@ -14,9 +14,11 @@ jobs:
           node-version: '24'
           cache: npm
       - run: npm ci --no-audit --no-fund
-      - name: Check browser and Worker source syntax
+      - name: Check browser and shared API source syntax
         run: |
           node --check web/world.mjs
+          node --check web/direct-edit.mjs
+          node --check server/index.mjs
           node --check web/scene-model.mjs
           node --check web/scene-renderer.mjs
           node --check worker/index.mjs
@@ -28,5 +30,5 @@ jobs:
           node --check web/legacy/website.mjs
           node --check web/legacy/legacy-route.js
       - run: npm test
-      - name: Build embedded assets and D1 migration artifact
+      - name: Build self-hosted browser assets
         run: npm run build

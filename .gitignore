@@ -11,3 +11,10 @@ artifacts/
 .wrangler/
 .sites-runtime/
 dist/
+build/
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+deploy/*.env
+deploy/*.tar.gz
+__pycache__/

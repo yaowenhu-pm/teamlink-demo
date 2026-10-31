@@ -4,7 +4,7 @@ import path from 'node:path';
 import {createHash} from 'node:crypto';
 const root=process.cwd(),web=path.join(root,'web'),out=path.join(root,'dist');
 const files={};
-async function walk(directory){for(const item of await readdir(directory,{withFileTypes:true})){const full=path.join(directory,item.name);if(item.isDirectory())await walk(full);else{const key='/'+path.relative(web,full).split(path.sep).join('/');const binary=/\.(png|jpg|jpeg|woff2|ico)$/i.test(item.name);files[key]={encoding:binary?'base64':'utf8',content:await readFile(full,binary?'base64':'utf8')};}}}
+async function walk(directory){for(const item of await readdir(directory,{withFileTypes:true})){const full=path.join(directory,item.name);if(item.isDirectory())await walk(full);else{const key='/'+path.relative(web,full).split(path.sep).join('/');const binary=/\.(png|jpg|jpeg|webp|woff2|ico)$/i.test(item.name);files[key]={encoding:binary?'base64':'utf8',content:await readFile(full,binary?'base64':'utf8')};}}}
 await walk(web);
 const frontend=await build({entryPoints:['web/world.mjs'],bundle:true,write:false,format:'esm',platform:'browser',target:'es2022',legalComments:'inline',minify:false});
 files['/world.mjs']={encoding:'utf8',content:frontend.outputFiles[0].text};

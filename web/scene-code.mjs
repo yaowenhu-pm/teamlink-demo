@@ -1,6 +1,6 @@
 import {createScene, validateScene, updateScene, sceneChanges} from './scene-model.mjs';
 
-export const SCENE_CODE_MAX_BYTES = 8192;
+export const SCENE_CODE_MAX_BYTES = 32768;
 export const SCENE_CODE_FIELDS = Object.freeze(Object.keys(createScene()).filter(key => !['schemaVersion', 'boat'].includes(key)));
 
 // These reference real modules served by the site. Read their actual source text;

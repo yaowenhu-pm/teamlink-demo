@@ -11,5 +11,22 @@
   "qr": "Recorded temporary QR masked with a labelled live-entry tile; website QR remains real.",
   "music": "Original synthesized instrumental, created for this film; no third-party track",
   "output": "media/teamlink-intro-v1.mp4",
-  "bytes": 1345216
+  "bytes": 1339458,
+  "revision": "20261101-cn-outro",
+  "sha256": "e1e520cc4fd0bd03da40c915727ec9b5603bee9ebcc2ea4c3b99717b6444d7d6",
+  "outro": {
+    "startSeconds": 26,
+    "endSeconds": 30,
+    "displayText": "teamlink.yaowenhu.cn",
+    "entryUrl": "https://teamlink.yaowenhu.cn/",
+    "updatedAt": "2026-11-01",
+    "method": "Existing authoring function with only the outro URL substituted; original 0–26s real footage retained and original AAC audio copied without re-encoding."
+  },
+  "validation": {
+    "durationSeconds": 30,
+    "decodedVideoFrames": 900,
+    "originalAudioPacketsIdentical": true,
+    "head26sSSIM": 0.99889,
+    "outroFrameVisuallyCheckedAtSeconds": 28
+  }
 }

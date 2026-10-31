@@ -1,4 +1,4 @@
-import { validateScene, solarPosition, leafPath } from './scene-model.mjs';
+import { createScene, validateScene, solarPosition, leafPath } from './scene-model.mjs';
 
 const NS = 'http://www.w3.org/2000/svg';
 const WIDTH = 1600, HEIGHT = 1000, SKY_HEIGHT = 480;
@@ -11,6 +11,37 @@ const seeded = (seed) => {
   let state = seed >>> 0;
   return () => { state = (Math.imul(1664525, state) + 1013904223) >>> 0; return state / 4294967296; };
 };
+
+export function sceneCameraPoint(viewport, point) {
+  return Object.freeze({x: clamp((point.x - viewport.left) / (viewport.right - viewport.left)),
+    y: clamp((point.y - viewport.top) / (viewport.bottom - viewport.top))});
+}
+const worldCameraPoint = (viewport, point) => ({x: viewport.left + point.x * (viewport.right - viewport.left),
+  y: viewport.top + point.y * (viewport.bottom - viewport.top)});
+function resolveAnchor(scene, id, fallback, viewport) {
+  const placement = scene.placements?.find(item => item.id === id);
+  return placement ? worldCameraPoint(viewport, placement) : {x: fallback.x, y: fallback.y};
+}
+export function resolveSceneObjectAnchor(value, id, fallback, viewport) {
+  return Object.freeze(resolveAnchor(validateScene(value), id, fallback, viewport));
+}
+/** Always use the original anchor and grab point, never the previous render's delta. */
+export function dragSceneObjectPoint(viewport, anchor, grab, pointer) {
+  return sceneCameraPoint(viewport, {x: anchor.x + pointer.x - grab.x, y: anchor.y + pointer.y - grab.y});
+}
+export function trajectoryPhaseAt(points, point) {
+  let best = null;
+  for (let index = 0; index < points.length - 1; index++) {
+    const a = points[index], b = points[index + 1], dx = (b.x-a.x)*WIDTH, dy = (b.y-a.y)*HEIGHT;
+    const px = (point.x-a.x)*WIDTH, py = (point.y-a.y)*HEIGHT;
+    const along = clamp((px*dx+py*dy)/(dx*dx+dy*dy || 1));
+    const x = a.x+(b.x-a.x)*along, y = a.y+(b.y-a.y)*along;
+    const distance = ((point.x-x)*WIDTH)**2+((point.y-y)*HEIGHT)**2;
+    if (!best || distance < best.distance) best = {distance, t: a.t+(b.t-a.t)*along, point: {x,y}};
+  }
+  if (!best) throw new RangeError('Trajectory needs at least two points.');
+  return Object.freeze({t: best.t, point: Object.freeze(best.point)});
+}
 
 /** Visible SVG coordinates, not CSS pixels. Counts stay readable after slice cropping. */
 export function layoutSceneObjects(value, viewport = {}) {
@@ -29,7 +60,7 @@ export function layoutSceneObjects(value, viewport = {}) {
     if (scene.mountains <= 2) {
       const shift = coastShifts[template];
       mountains.push(Object.freeze({id: index, template, peakX: (template === 'left' ? 464 : 1519) + shift,
-        baseY: template === 'left' ? 650 : 721, width: template === 'left' ? 910 : 293,
+        baseY: template === 'left' ? 650 : 721, width: template === 'left' ? 910 : 548,
         height: template === 'left' ? 333 : 297, transform: 'translate(' + fixed(shift) + ' 0)'}));
     } else {
       const cell = width / scene.mountains, peakX = left + (index + .5) * cell + (mountainRandom() - .5) * cell * .1;
@@ -71,12 +102,25 @@ export function layoutSceneObjects(value, viewport = {}) {
       boats.push(boat(index, x, y, scale, boatRandom() * TAU));
     }
   }
-  return Object.freeze({boats: Object.freeze(boats), mountains: Object.freeze(mountains), coastShifts});
+  const birds = [], birdRandom = seeded(scene.seed ^ 0xb17d);
+  const originalBirds = [{x:833,y:302,variant:0},{x:867.5,y:287,variant:1},{x:816,y:324,variant:2}];
+  const birdCount = scene.birds ?? 3;
+  const birdColumns = Math.max(1,Math.min(7,Math.ceil(Math.sqrt(birdCount*width/200))));
+  const birdRows = Math.max(1,Math.ceil(birdCount/birdColumns));
+  const skyTop = Math.max(top+28,100), skyBottom = Math.min(445,bottom-28);
+  for(let index=0;index<birdCount;index++) {
+    const item = birdCount <= 3 ? originalBirds[index] : {
+      x:left+30+(index%birdColumns+.5)*(width-60)/birdColumns+(birdRandom()-.5)*14,
+      y:skyTop+(Math.floor(index/birdColumns)+.5)*(skyBottom-skyTop)/birdRows+(birdRandom()-.5)*8,
+      variant:index%3};
+    birds.push(Object.freeze({id:index,...item}));
+  }
+  return Object.freeze({boats: Object.freeze(boats), mountains: Object.freeze(mountains), birds:Object.freeze(birds), coastShifts});
 }
 
 function generatedMountain(item, id) {
   const w = item.width / 2, h = item.height, p = item.lean * w, shoulder = item.shoulder, n = fixed;
-  return '<g data-object="mountain" data-mountain-id="' + item.id + '" transform="' + item.transform + '">' +
+  return '<g data-object="mountain" data-scene-object="mountain:' + item.id + '" data-mountain-id="' + item.id + '" transform="' + item.transform + '">' +
     '<path d="M' + n(-w) + ' 0C' + n(-w * .66) + ' ' + n(-h * .1) + ' ' + n(p - w * .48) + ' ' + n(-h * shoulder) +
     ' ' + n(p - w * .15) + ' ' + n(-h * .82) + 'Q' + n(p) + ' ' + n(-h * 1.06) + ' ' + n(p + w * .16) + ' ' + n(-h * .84) +
     'C' + n(p + w * .43) + ' ' + n(-h * (shoulder - .1)) + ' ' + n(w * .64) + ' ' + n(-h * .16) + ' ' + n(w) +
@@ -125,7 +169,7 @@ function phasePoint(points, phase) {
  * Owns only the SVG contents. Rendering is synchronous and deterministic for
  * scene + phase. It never reads a wall clock, credentials, network or storage.
  */
-export function mountLandscape(svgElement, { onSunDrag, onTreeSelect, onLeafSelect } = {}) {
+export function mountLandscape(svgElement, { onSunDrag, onTreeSelect, onLeafSelect, onObjectSelect, onObjectDrag, onTrajectoryDrag, onPhaseChange } = {}) {
   if (!svgElement || svgElement.namespaceURI !== NS || svgElement.localName !== 'svg') throw new TypeError('mountLandscape requires an SVG element.');
   const id = 'landscape-' + ++nextMount;
   svgElement.setAttribute('viewBox', `0 0 ${WIDTH} ${HEIGHT}`);
@@ -154,6 +198,9 @@ export function mountLandscape(svgElement, { onSunDrag, onTreeSelect, onLeafSele
       [data-landscape-mount="${id}"] [data-role="sun-control"]:hover .sun-affordance,
       [data-landscape-mount="${id}"] [data-role="sun-control"]:focus .sun-affordance{opacity:1}
       [data-landscape-mount="${id}"] [data-select]:focus{filter:drop-shadow(0 0 5px #f4d88e88)}
+      [data-scene-object]{pointer-events:visiblePainted;touch-action:none;cursor:grab;outline:none}
+      [data-scene-object]:active,[data-trajectory-handle]:active{cursor:grabbing}
+      [data-trajectory-handle]{pointer-events:all;touch-action:none;cursor:grab;outline:none}
     </style>
     <rect width="1600" height="1000" fill="url(#${id}-sky)"/>
     <g data-layer="stars" pointer-events="none"></g>
@@ -195,9 +242,9 @@ export function mountLandscape(svgElement, { onSunDrag, onTreeSelect, onLeafSele
       <path d="M154 670C258 688 316 687 389 684M520 680C608 681 667 666 722 649" fill="none" stroke="#ced9c8" stroke-width=".8" opacity=".14"/>
       </g>
       <g data-layer="mountain-right">
-      <path d="M1322 567C1371 535 1404 503 1438 484C1475 466 1491 427 1519 424C1547 422 1570 455 1615 468V721C1557 703 1527 681 1491 670C1428 653 1367 612 1322 567Z" fill="url(#${id}-island)"/>
+      <path d="M1322 567C1371 535 1404 503 1438 484C1475 466 1491 427 1519 424C1547 422 1570 455 1615 468C1666 493 1710 590 1775 610C1810 628 1844 665 1870 680Q1790 746 1700 739Q1654 733 1615 721C1557 703 1527 681 1491 670C1428 653 1367 612 1322 567Z" fill="url(#${id}-island)"/>
       <path d="M1518 427C1510 470 1483 509 1473 540C1461 572 1458 604 1471 637C1434 609 1404 583 1388 558C1444 514 1486 466 1518 427Z" fill="var(--leaf-light)" opacity=".14"/>
-      <path d="M1325 572C1378 605 1421 636 1470 653C1524 673 1565 703 1611 710" fill="none" stroke="url(#${id}-shore)" stroke-width="3"/>
+      <path d="M1325 572C1378 605 1421 636 1470 653C1524 673 1565 703 1611 710C1698 746 1795 744 1864 685" fill="none" stroke="url(#${id}-shore)" stroke-width="3"/>
       <path d="M1382 627C1452 669 1515 700 1609 727" fill="none" stroke="#c0d1c4" stroke-width="1" opacity=".28"/>
       </g>
       <g data-layer="support">
@@ -212,24 +259,48 @@ export function mountLandscape(svgElement, { onSunDrag, onTreeSelect, onLeafSele
     </g>
     <g data-layer="land-details" pointer-events="none"></g>
     <g data-layer="pines"></g><g data-layer="boat" pointer-events="none"></g>
-    <g data-layer="birds" pointer-events="none" fill="none" stroke="var(--land-near)" stroke-linecap="round" opacity=".65"><path d="M820 302q7-6 14 0q6-5 12-1"/><path d="M858 287q5-4 10 0q5-4 9-1"/><path d="M808 324q4-3 8 0q4-3 8 0"/></g>
+    <g data-layer="birds" fill="none" stroke="var(--land-near)" stroke-linecap="round" opacity=".65"></g>
     <g data-layer="hero" data-select="tree" role="button" tabindex="0" aria-label="选择前景枝树，修改枝角与递归深度"></g>
     <g data-layer="flowers" pointer-events="none"></g>
     <g data-layer="rain" pointer-events="none" stroke="#d8e5e4" stroke-width="1.15"></g>
-    <g data-layer="trajectory" pointer-events="none"><path data-path="compare" fill="none" stroke="#b5ddd1" stroke-width="3" stroke-dasharray="10 12"/><path data-path="current" fill="none" stroke="#f3d99b" stroke-width="3.5"/><circle data-part="phase-dot" r="8" fill="#ffe6a7" stroke="#244a4d" stroke-width="2"/></g>
+    <g data-layer="trajectory" pointer-events="none"><path data-path="compare" fill="none" stroke="#b5ddd1" stroke-width="3" stroke-dasharray="10 12"/><path data-path="current" fill="none" stroke="#f3d99b" stroke-width="3.5"/>
+      <g data-trajectory-handle="origin" role="slider" tabindex="0" aria-label="拖动落叶轨迹起点"><circle data-handle-hit fill="transparent"/><circle data-handle-dot fill="#f5fcff" stroke="#2479b3" stroke-width="2" vector-effect="non-scaling-stroke"/></g>
+      <g data-trajectory-handle="target" role="slider" tabindex="0" aria-label="拖动落叶轨迹终点"><circle data-handle-hit fill="transparent"/><circle data-handle-dot fill="#f5fcff" stroke="#2479b3" stroke-width="2" vector-effect="non-scaling-stroke"/></g>
+      <g data-trajectory-handle="phase" role="slider" tabindex="0" aria-label="沿轨迹拖动落叶时间" aria-valuemin="0" aria-valuemax="1"><circle data-handle-hit fill="transparent"/><circle data-part="phase-dot" data-handle-dot fill="#ffe6a7" stroke="#244a4d" stroke-width="2" vector-effect="non-scaling-stroke"/></g>
+    </g>
     <g data-layer="leaf" data-select="leaf" role="button" tabindex="0" aria-label="选择落叶，查看真实运动轨迹"><ellipse rx="36" ry="32" fill="transparent"/><path d="M-14 2Q-8-13 15-9Q18 9-4 12Q-12 10-14 2Z" fill="#ebc876"/><path d="M-15 10Q-3 1 11-6" fill="none" stroke="#9b8145" stroke-width="1.2"/></g>
     <g data-role="sun-control" role="slider" tabindex="0" aria-label="拖动太阳或月亮改变时间" aria-valuemin="0" aria-valuemax="24"><circle r="76" fill="transparent"/><circle class="sun-affordance" r="69" fill="none" stroke="#f8ecc8" stroke-width="1.5"/><text class="sun-affordance" data-part="time-label" text-anchor="middle" y="104" font-size="15" fill="#edf2df" font-family="system-ui,sans-serif"></text></g>`;
 
   const layer = (name) => svgElement.querySelector(`[data-layer="${name}"]`);
   const layers = Object.fromEntries(['stars','clouds','sun-visual','reflection','water','distant','mountain-left','mountain-right','mountain-extras','support','foreground','land-details','pines','boat','birds','hero','flowers','rain','trajectory','leaf'].map((name) => [name, layer(name)]));
+  // Keep trajectory handles above the falling leaf's transparent hit ellipse.
+  svgElement.append(layers.trajectory);
+  const selectionLayer = document.createElementNS(NS,'g');
+  selectionLayer.setAttribute('data-layer','selection');selectionLayer.setAttribute('pointer-events','none');
+  selectionLayer.innerHTML = '<rect data-selection-box fill="none" stroke="#3d91d8" stroke-width="1.5" stroke-dasharray="6 4" rx="5" vector-effect="non-scaling-stroke"/>';
+  selectionLayer.style.display='none';svgElement.append(selectionLayer);
+  const selectionBox=selectionLayer.querySelector('[data-selection-box]');
+  const trajectoryHandles=Object.fromEntries(['origin','target','phase'].map(handle=>[handle,layers.trajectory.querySelector('[data-trajectory-handle="'+handle+'"]')]));
+  for(const [handle,node] of Object.entries(trajectoryHandles))node.style.pointerEvents=
+    typeof onTrajectoryDrag==='function'||(handle==='phase'&&typeof onPhaseChange==='function')?'all':'none';
   const sunControl = svgElement.querySelector('[data-role="sun-control"]');
   const stops = Object.fromEntries(['sky-top','sky-bottom','sea-top','sea-bottom'].map((name) => [name, svgElement.querySelector(`[data-stop="${name}"]`)]));
   let destroyed = false, current = null, drag = null, geometryKey = '', paletteKey = '', weatherKey = '', pathKey = '', compareKey = '', points = [], sunSpan = 1240;
-  let objectLayout = null, boatNodes = [];
+  let objectLayout = null, boatNodes = [], birdNodes = [], heroAnchorLocal = {x:512,y:1010};
+  let camera={left:0,right:WIDTH,top:0,bottom:HEIGHT}, trajectoryFrame={x:150,y:525,scale:FOREGROUND_SCALE};
+  let interactiveDrag=null, selectedId=null, currentPhase=0, skipClickUntil=0;
+  const objectRecords=new Map();
   const disposers = [];
   const listen = (node, name, callback, options) => { node.addEventListener(name, callback, options); disposers.push(() => node.removeEventListener(name, callback, options)); };
 
+  function rememberObject(node,objectId,kind,anchor,transform) {
+    node.setAttribute('data-scene-object',objectId);node.setAttribute('data-object',kind);
+    node.setAttribute('role','button');node.setAttribute('tabindex','0');
+    node.setAttribute('aria-label',({tree:'树',boat:'帆船',mountain:'山',bird:'鸟'})[kind]+' '+(Number(objectId.split(':')[1])+1)+'，可选择和拖动');
+    objectRecords.set(objectId,{id:objectId,kind,node,baseAnchor:anchor,anchor,baseTransform:transform});
+  }
   function geometry(scene, objects) {
+    objectRecords.clear();
     objectLayout = objects;
     const random = seeded(scene.seed), pineCount = Math.max(0, scene.trees - 1), pines = [];
     for (let i = 0; i < pineCount; i++) {
@@ -239,10 +310,9 @@ export function mountLandscape(svgElement, { onSunDrag, onTreeSelect, onLeafSele
       const y = highGround ? (left ? 511 + x * .09 + random() * 35 : 563 + (x-1400) * .30 + random() * 27) :
         (left ? 622 + Math.sin(x/730*Math.PI) * 15 + random() * 10 : 681 + (x-1400) * .12 + random() * 8);
       const height = 16 + random() * 29;
-      const mountain = objects.mountains.find(item => item.template === side);
-      const transform = highGround && mountain ? mountain.transform : 'translate(' + fixed(objects.coastShifts[side]) + ' 0)';
-      pines.push('<path data-object="tree" data-select="tree" transform="' + transform + '" d="' + pine(x,y,height) +
-        '" fill="var(--land-near)" opacity="' + fixed(.67+random()*.3) + '"/>');
+      const shift=objects.coastShifts[side];
+      const baseX=x+shift;
+      pines.push('<g data-object="tree" data-scene-object="tree:'+(i+1)+'" data-select="tree" data-base-x="'+fixed(baseX)+'" data-base-y="'+fixed(y)+'" transform="translate('+fixed(baseX)+' '+fixed(y)+')"><path d="'+pine(0,0,height)+'" fill="var(--land-near)" opacity="'+fixed(.67+random()*.3)+'"/></g>');
     }
     layers.pines.innerHTML = pines.join('');
     const stars = [];
@@ -278,26 +348,34 @@ export function mountLandscape(svgElement, { onSunDrag, onTreeSelect, onLeafSele
     }
     layers.flowers.innerHTML = flowers.join('');
     const boatMarkup = '<path d="M-42 25q44-4 86 0m-67 7h48m-35 5h21" fill="none" stroke="#d2dfd1" stroke-width=".9" opacity=".24"/><path d="M-27 11Q-2 16 28 10L18 20Q1 24-16 20Z" fill="#304e52"/><path d="M-23 12Q2 17 24 12" fill="none" stroke="#b3bea6" stroke-width="1.3"/><path d="M1-53L0 13" stroke="#d5d1b7" stroke-width="1.4"/><path d="M-3-49Q-8-21-28 8L-3 6Z" fill="#f4e9cc"/><path d="M5-39Q20-15 25 7L5 5Z" fill="#d8dfca"/><path d="M-5-36L-22 5M8-27L20 3" fill="none" stroke="#fff9e5" stroke-opacity=".4" stroke-width=".8"/>';
-    layers.boat.innerHTML = objects.boats.map(item => '<g data-object="boat" data-boat-id="' + item.id + '">' + boatMarkup + '</g>').join('');
+    layers.boat.innerHTML = objects.boats.map(item => '<g data-object="boat" data-scene-object="boat:'+item.id+'" data-boat-id="'+item.id+'"><g data-boat-art><rect x="-40" y="-60" width="80" height="100" fill="transparent" pointer-events="all"/>'+boatMarkup+'</g></g>').join('');
     boatNodes = Array.from(layers.boat.querySelectorAll('[data-object="boat"]'));
     layers.distant.style.display = scene.mountains ? '' : 'none';
     for (const side of ['left','right']) {
       const node = layers['mountain-' + side], item = objects.mountains.find(mountain => mountain.template === side);
       node.style.display = item ? '' : 'none';
       if (item) { node.setAttribute('data-object','mountain');node.setAttribute('data-mountain-id',String(item.id));node.setAttribute('transform',item.transform); }
-      else { node.removeAttribute('data-object');node.removeAttribute('data-mountain-id'); }
+      else { node.removeAttribute('data-object');node.removeAttribute('data-mountain-id');node.removeAttribute('data-scene-object'); }
     }
     layers['mountain-extras'].innerHTML = objects.mountains.filter(item => item.template === 'generated').map(item => generatedMountain(item,id)).join('');
     layers.support.style.display = scene.mountains === 2 ? 'none' : '';
     for (const side of ['left','right']) layers.support.querySelector('[data-support="' + side + '"]').setAttribute('transform','translate(' + fixed(objects.coastShifts[side]) + ' 0)');
 
+    const birdPaths=['M-13 0q7-6 14 0q6-5 12-1','M-9.5 0q5-4 10 0q5-4 9-1','M-8 0q4-3 8 0q4-3 8 0'];
+    layers.birds.innerHTML=objects.birds.map(item=>'<g data-object="bird" data-scene-object="bird:'+item.id+'"><g data-bird-art><ellipse rx="20" ry="14" fill="transparent" stroke="none" pointer-events="all"/><path d="'+birdPaths[item.variant]+'"/></g></g>').join('');
+    birdNodes=Array.from(layers.birds.querySelectorAll('[data-scene-object]'));
     hero(scene);
+    for(const node of layers.pines.querySelectorAll('[data-scene-object]'))rememberObject(node,node.dataset.sceneObject,'tree',{x:Number(node.dataset.baseX),y:Number(node.dataset.baseY)},node.getAttribute('transform'));
+    for(const item of objects.boats)rememberObject(boatNodes[item.id],'boat:'+item.id,'boat',{x:item.x,y:item.y},'translate('+item.x+' '+item.y+')');
+    for(const item of objects.birds)rememberObject(birdNodes[item.id],'bird:'+item.id,'bird',{x:item.x,y:item.y},'translate('+item.x+' '+item.y+')');
+    for(const item of objects.mountains){const node=item.template==='generated'?layers['mountain-extras'].querySelector('[data-mountain-id="'+item.id+'"]'):layers['mountain-'+item.template];rememberObject(node,'mountain:'+item.id,'mountain',{x:item.peakX,y:item.baseY-item.height},item.transform);}
+    if(scene.trees)rememberObject(layers.hero,'tree:0','tree',null,null);
   }
 
   function hero(scene) {
     layers.hero.style.display = scene.trees ? '' : 'none';
     layers.hero.toggleAttribute('data-object', scene.trees > 0);
-    if (scene.trees) layers.hero.setAttribute('data-object', 'tree');
+    if (scene.trees) layers.hero.setAttribute('data-object', 'tree');else layers.hero.removeAttribute('data-scene-object');
     const random = seeded(scene.seed ^ 0xa32e39), segments = [], tips = [];
     const angle = scene.branchAngle * Math.PI/180;
     function branch(x, y, direction, length, depth, level) {
@@ -314,8 +392,9 @@ export function mountLandscape(svgElement, { onSunDrag, onTreeSelect, onLeafSele
     const apex = all.reduce((best,p) => p.y < best.y ? p : best, all[0]);
     const minX = Math.min(...all.map(p=>p.x)), maxX = Math.max(...all.map(p=>p.x));
     const scale = Math.min(700/Math.max(1,-apex.y),830/Math.max(1,maxX-minX));
-    const origin = leafPath(scene,{samples:2})[0];
+    const origin = createScene().leafOrigin ?? leafPath(createScene(),{samples:2})[0];
     const tx = origin.x*WIDTH-apex.x*scale, ty = origin.y*HEIGHT-apex.y*scale;
+    heroAnchorLocal={x:tx,y:1010};
     const groups = [];
     for (let level=0;level<scene.branchDepth;level++) {
       const path = segments.filter(s=>s.level===level).map(s=>`M${fixed(tx+s.x1*scale)} ${fixed(ty+s.y1*scale)}Q${fixed(tx+(s.x1+s.x2)*.5*scale+3)} ${fixed(ty+(s.y1+s.y2)*.5*scale)} ${fixed(tx+s.x2*scale)} ${fixed(ty+s.y2*scale)}`).join('');
@@ -343,7 +422,7 @@ export function mountLandscape(svgElement, { onSunDrag, onTreeSelect, onLeafSele
     svgElement.setAttribute('data-rain-particles', String(count));
   }
 
-  function render(scene, { phase = 0, showTrajectory = false, compareScene = null } = {}) {
+  function render(scene, { phase = 0, showTrajectory = false, compareScene = null, selectedObject = null } = {}) {
     if (destroyed) return;
     // Both the tree and every leaf sample share this visual camera. The model
     // stays in its original normalized coordinates, including comparison data.
@@ -358,9 +437,10 @@ export function mountLandscape(svgElement, { onSunDrag, onTreeSelect, onLeafSele
     const sunPadding = Math.min(84, visibleWidth*.18);
     const sunLeft = Math.max(180,visibleLeft+sunPadding), sunRight = Math.min(1420,visibleRight-sunPadding);
     sunSpan = sunRight-sunLeft;
-    current = validateScene(scene);
-    phase = Number.isFinite(phase) ? clamp(phase) : 0;
-    const nextGeometry = [current.seed,current.trees,current.flowers,current.branchAngle,current.branchDepth,current.boats,current.mountains,fixed(visibleLeft),fixed(visibleRight),fixed(visibleTop),fixed(visibleBottom)].join(':');
+    camera={left:visibleLeft,right:visibleRight,top:visibleTop,bottom:visibleBottom};
+    current = validateScene(scene);selectedId=typeof selectedObject==='string'?selectedObject:selectedObject?.id??null;
+    phase = Number.isFinite(phase) ? clamp(phase) : 0;currentPhase=phase;
+    const nextGeometry = [current.seed,current.trees,current.flowers,current.branchAngle,current.branchDepth,current.boats,current.mountains,current.birds,fixed(visibleLeft),fixed(visibleRight),fixed(visibleTop),fixed(visibleBottom)].join(':');
     if (nextGeometry !== geometryKey) { geometry(current,layoutSceneObjects(current,{left:visibleLeft,right:visibleRight,top:visibleTop,bottom:visibleBottom}));geometryKey=nextGeometry; }
     const nextWeather = [current.seed,current.rain,current.wind].join(':');
     if (nextWeather !== weatherKey) { weather(current);weatherKey=nextWeather; }
@@ -394,33 +474,132 @@ export function mountLandscape(svgElement, { onSunDrag, onTreeSelect, onLeafSele
     layers.reflection.setAttribute('opacity',moon?'.14':'.8');
     layers.water.setAttribute('transform',`translate(${fixed(Math.sin(phase*TAU)*current.wind*12)} ${fixed(Math.cos(phase*TAU)*current.wind*2)})`);
     layers.clouds.setAttribute('transform',`translate(${fixed(Math.sin(phase*TAU)*current.wind*20)} 0)`);
-    layers.birds.setAttribute('transform',`translate(${fixed(Math.sin(phase*TAU)*current.wind*15)} ${fixed(Math.cos(phase*TAU)*current.wind*3)})`);
     layers.rain.setAttribute('transform',`translate(${fixed(-phase*current.wind*24)} ${fixed(phase*55)})`);
     for (const [index,node] of boatNodes.entries()) {
-      const item = objectLayout.boats[index], motion = Math.sin(phase*TAU+item.phase) * current.wind;
-      node.setAttribute('transform','translate(' + item.x + ' ' + fixed(item.y+motion*4*item.scale/.82) +
-        ') rotate(' + fixed(motion*4) + ') scale(' + item.scale + ')');
+      const item=objectLayout.boats[index],motion=Math.sin(phase*TAU+item.phase)*current.wind;
+      node.querySelector('[data-boat-art]').setAttribute('transform','translate(0 '+fixed(motion*4*item.scale/.82)+') rotate('+fixed(motion*4)+') scale('+item.scale+')');
     }
+    for(const node of birdNodes)node.querySelector('[data-bird-art]').setAttribute('transform','translate('+fixed(Math.sin(phase*TAU)*current.wind*15)+' '+fixed(Math.cos(phase*TAU)*current.wind*3)+')');
     const foregroundShift=`translate(${fixed(foregroundX-150)} 0)`;
     layers.foreground.setAttribute('transform',foregroundShift);
     layers.flowers.setAttribute('transform',foregroundShift);
     layers['land-details'].querySelector('[data-detail="foreground"]').setAttribute('transform',foregroundShift);
     layers.hero.setAttribute('transform',foregroundCamera);
-    layers.trajectory.setAttribute('transform',foregroundCamera);
-    const nextPath=[current.seed,current.wind,current.rain].join(':');
+    let heroDelta={x:0,y:0};
+    for(const record of objectRecords.values()) {
+      if(record.id==='tree:0'){record.baseAnchor={x:foregroundX+heroAnchorLocal.x*FOREGROUND_SCALE,y:foregroundY+heroAnchorLocal.y*FOREGROUND_SCALE};record.baseTransform=foregroundCamera;}
+      const anchor=resolveAnchor(current,record.id,record.baseAnchor,camera);
+      const delta={x:anchor.x-record.baseAnchor.x,y:anchor.y-record.baseAnchor.y};
+      record.anchor=anchor;record.point=sceneCameraPoint(camera,anchor);
+      record.node.setAttribute('transform','translate('+fixed(delta.x)+' '+fixed(delta.y)+') '+record.baseTransform);
+      record.node.setAttribute('aria-pressed',String(record.id===selectedId));
+      if(record.id==='tree:0')heroDelta=delta;
+    }
+    trajectoryFrame={x:foregroundX+heroDelta.x,y:foregroundY+heroDelta.y,scale:FOREGROUND_SCALE};
+    layers.trajectory.setAttribute('transform','translate('+fixed(trajectoryFrame.x)+' '+fixed(trajectoryFrame.y)+') scale('+FOREGROUND_SCALE+')');
+    const nextPath=[current.seed,current.wind,current.rain,JSON.stringify(current.leafOrigin),JSON.stringify(current.leafTarget)].join(':');
     if(nextPath!==pathKey){points=leafPath(current,{samples:31});layers.trajectory.querySelector('[data-path="current"]').setAttribute('d',pointsPath(points));pathKey=nextPath;}
     const p=phasePoint(points,phase);
-    layers.leaf.setAttribute('transform',`translate(${fixed(foregroundX+p.x*WIDTH*FOREGROUND_SCALE)} ${fixed(foregroundY+p.y*HEIGHT*FOREGROUND_SCALE)}) rotate(${fixed(p.rotation)}) scale(.65)`);
+    layers.leaf.setAttribute('transform',`translate(${fixed(trajectoryFrame.x+p.x*WIDTH*FOREGROUND_SCALE)} ${fixed(trajectoryFrame.y+p.y*HEIGHT*FOREGROUND_SCALE)}) rotate(${fixed(p.rotation)}) scale(.65)`);
     layers.leaf.style.display=current.trees?'':'none';
     layers.trajectory.style.display=showTrajectory&&current.trees?'':'none';
-    const dot=layers.trajectory.querySelector('[data-part="phase-dot"]');dot.setAttribute('cx',String(p.x*WIDTH));dot.setAttribute('cy',String(p.y*HEIGHT));
+    const pixelsPerLocal=(bounds?.width>0&&bounds?.height>0?Math.max(bounds.width/WIDTH,bounds.height/HEIGHT):1)*FOREGROUND_SCALE;
+    for(const [handle,point] of Object.entries({origin:points[0],target:points.at(-1),phase:p})){
+      const node=trajectoryHandles[handle];node.setAttribute('transform','translate('+fixed(point.x*WIDTH)+' '+fixed(point.y*HEIGHT)+')');
+      node.querySelector('[data-handle-hit]').setAttribute('r',String(20/pixelsPerLocal));
+      node.querySelector('[data-handle-dot]').setAttribute('r',String((handle==='phase'?7:6)/pixelsPerLocal));
+      node.setAttribute('aria-valuenow',String(handle==='phase'?phase:point.x));
+    }
     const comparePath=layers.trajectory.querySelector('[data-path="compare"]');
-    if(compareScene){const comparison=validateScene(compareScene),key=[comparison.seed,comparison.wind,comparison.rain].join(':');if(key!==compareKey){comparePath.setAttribute('d',pointsPath(leafPath(comparison,{samples:31})));compareKey=key;}comparePath.style.display='';}
+    if(compareScene){const comparison=validateScene(compareScene),key=[comparison.seed,comparison.wind,comparison.rain,JSON.stringify(comparison.leafOrigin),JSON.stringify(comparison.leafTarget)].join(':');if(key!==compareKey){comparePath.setAttribute('d',pointsPath(leafPath(comparison,{samples:31})));compareKey=key;}comparePath.style.display='';}
     else comparePath.style.display='none';
+    updateSelection();
+    svgElement.setAttribute('data-birds',String(current.birds??3));
     svgElement.setAttribute('data-boats',String(current.boats));
     svgElement.setAttribute('data-mountains',String(current.mountains));
     for(const [name,value] of Object.entries({hour:current.hour,trees:current.trees,rain:current.rain,wind:current.wind,'branch-angle':current.branchAngle,'branch-depth':current.branchDepth,flowers:current.flowers,phase,'leaf-x':p.x,'leaf-y':p.y,night:moon}))svgElement.setAttribute('data-'+name,String(value));
   }
+
+  function updateSelection() {
+    const record=objectRecords.get(selectedId);
+    if(!record){selectionLayer.style.display='none';svgElement.removeAttribute('data-selected-scene-object');return;}
+    svgElement.setAttribute('data-selected-scene-object',record.id);
+    try {
+      const box=record.node.getBBox(), rootMatrix=svgElement.getScreenCTM(), nodeMatrix=record.node.getScreenCTM();
+      if(!rootMatrix||!nodeMatrix)throw Error();
+      const matrix=rootMatrix.inverse().multiply(nodeMatrix);
+      const corners=[[box.x,box.y],[box.x+box.width,box.y],[box.x,box.y+box.height],[box.x+box.width,box.y+box.height]].map(([x,y])=>{
+        const point=svgElement.createSVGPoint();point.x=x;point.y=y;return point.matrixTransform(matrix);
+      });
+      const left=Math.min(...corners.map(point=>point.x)),top=Math.min(...corners.map(point=>point.y));
+      const right=Math.max(...corners.map(point=>point.x)),bottom=Math.max(...corners.map(point=>point.y));
+      for(const [name,value] of Object.entries({x:left-8,y:top-8,width:right-left+16,height:bottom-top+16}))selectionBox.setAttribute(name,String(fixed(value)));
+      selectionLayer.style.display='';
+    } catch {selectionLayer.style.display='none';}
+  }
+  function announceSelection(record) {
+    selectedId=record.id;updateSelection();
+    const detail={id:record.id,kind:record.kind,point:{...record.point}};
+    if(typeof onObjectSelect==='function')onObjectSelect(detail);
+    else if(record.kind==='tree'&&typeof onTreeSelect==='function')onTreeSelect();
+  }
+  function leafScenePoint(point,frame=trajectoryFrame) {
+    return {x:clamp((point.x-frame.x)/(WIDTH*frame.scale)),y:clamp((point.y-frame.y)/(HEIGHT*frame.scale))};
+  }
+  function emitTrajectory(active,eventPhase,point,t) {
+    if(typeof onTrajectoryDrag==='function')onTrajectoryDrag({handle:active.handle,point:{...point},phase:eventPhase,...(active.handle==='phase'?{t}:{})});
+    if(active.handle==='phase'&&typeof onPhaseChange==='function')onPhaseChange(t);
+  }
+  function moveInteractive(event) {
+    const active=interactiveDrag;if(!active||event.pointerId!==active.pointerId)return;
+    const point=svgPoint(event);if(!point)return;
+    event.preventDefault();
+    if(!active.started){
+      if(Math.hypot(event.clientX-active.clientX,event.clientY-active.clientY)<3)return;
+      active.started=true;
+      if(active.type==='object')onObjectDrag?.({id:active.id,kind:active.kind,point:{...active.initialPoint},phase:'start'});
+      else emitTrajectory(active,'start',active.start,active.t);
+    }
+    if(active.type==='object'){
+      active.point=dragSceneObjectPoint(active.camera,active.anchor,active.grab,point);
+      onObjectDrag?.({id:active.id,kind:active.kind,point:{...active.point},phase:'move'});
+    }else{
+      const local=leafScenePoint(point,active.frame);
+      if(active.handle==='phase'){const projected=trajectoryPhaseAt(points,local);active.point=projected.point;active.t=projected.t;}
+      else active.point={x:clamp(active.start.x+local.x-active.grab.x),y:clamp(active.start.y+local.y-active.grab.y)};
+      emitTrajectory(active,'move',active.point,active.t);
+    }
+  }
+  function endInteractive(event) {
+    const active=interactiveDrag;if(!active||event.pointerId!==active.pointerId)return;
+    interactiveDrag=null;
+    if(svgElement.hasPointerCapture?.(event.pointerId))svgElement.releasePointerCapture(event.pointerId);
+    if(!active.started)return;
+    skipClickUntil=event.timeStamp+500;
+    if(active.type==='object')onObjectDrag?.({id:active.id,kind:active.kind,point:{...active.point},phase:'end'});
+    else emitTrajectory(active,'end',active.point,active.t);
+  }
+  listen(svgElement,'pointerdown',event=>{
+    if(!current||event.button!==0||drag||interactiveDrag)return;
+    const point=svgPoint(event);if(!point)return;
+    const handle=event.target.closest?.('[data-trajectory-handle]');
+    if(handle&&svgElement.contains(handle)&&(typeof onTrajectoryDrag==='function'||typeof onPhaseChange==='function')){
+      const key=handle.dataset.trajectoryHandle,start=key==='phase'?phasePoint(points,currentPhase):points[key==='origin'?0:points.length-1];
+      interactiveDrag={type:'trajectory',handle:key,pointerId:event.pointerId,clientX:event.clientX,clientY:event.clientY,
+        frame:{...trajectoryFrame},grab:leafScenePoint(point),start:{x:start.x,y:start.y},point:{x:start.x,y:start.y},t:currentPhase,started:false};
+    }else{
+      const node=event.target.closest?.('[data-scene-object]'),record=node&&objectRecords.get(node.dataset.sceneObject);
+      if(!record||(typeof onObjectSelect!=='function'&&typeof onObjectDrag!=='function'))return;
+      announceSelection(record);skipClickUntil=event.timeStamp+500;
+      if(typeof onObjectDrag!=='function')return;
+      interactiveDrag={type:'object',id:record.id,kind:record.kind,pointerId:event.pointerId,
+        clientX:event.clientX,clientY:event.clientY,camera:{...camera},anchor:{...record.anchor},grab:{x:point.x,y:point.y},
+        point:{...record.point},initialPoint:{...record.point},started:false};
+    }
+    event.preventDefault();event.stopPropagation();svgElement.setPointerCapture?.(event.pointerId);
+  });
+  listen(svgElement,'pointermove',moveInteractive);listen(svgElement,'pointerup',endInteractive);
+  listen(svgElement,'pointercancel',endInteractive);listen(svgElement,'lostpointercapture',endInteractive);
 
   function svgPoint(event) {
     const matrix=svgElement.getScreenCTM();
@@ -435,7 +614,7 @@ export function mountLandscape(svgElement, { onSunDrag, onTreeSelect, onLeafSele
     if(typeof onSunDrag==='function')onSunDrag(finished.hour,'end');
   }
   listen(sunControl,'pointerdown',(event)=>{
-    if(!current||event.button!==0||drag)return;
+    if(!current||event.button!==0||drag||interactiveDrag)return;
     const p=svgPoint(event);if(!p)return;event.preventDefault();
     drag={pointerId:event.pointerId,x:p.x,span:sunSpan,startHour:current.hour,hour:current.hour};
     sunControl.setPointerCapture?.(event.pointerId);
@@ -455,15 +634,34 @@ export function mountLandscape(svgElement, { onSunDrag, onTreeSelect, onLeafSele
     if(typeof onSunDrag==='function'){onSunDrag(current.hour,'start');onSunDrag(hour,'move');onSunDrag(hour,'end');}
   });
   const select=(event)=>{
+    if(event.type==='click'&&event.detail!==0&&event.timeStamp<=skipClickUntil)return;
+    const handle=event.target.closest?.('[data-trajectory-handle]');if(handle)return;
+    const object=event.target.closest?.('[data-scene-object]'),record=object&&objectRecords.get(object.dataset.sceneObject);
+    if(record){announceSelection(record);return;}
     const target=event.target.closest?.('[data-select]');if(!target||!svgElement.contains(target))return;
     if(target.dataset.select==='leaf'&&typeof onLeafSelect==='function')onLeafSelect();
-    if(target.dataset.select==='tree'&&typeof onTreeSelect==='function')onTreeSelect();
   };
   listen(svgElement,'click',select);
-  listen(svgElement,'keydown',(event)=>{if(event.target.closest?.('[data-select]')&&['Enter',' '].includes(event.key)){event.preventDefault();select(event);}});
+  listen(svgElement,'keydown',event=>{
+    const handle=event.target.closest?.('[data-trajectory-handle]');
+    if(handle&&['ArrowLeft','ArrowRight','ArrowUp','ArrowDown'].includes(event.key)){
+      event.preventDefault();const name=handle.dataset.trajectoryHandle;
+      const step=event.shiftKey?.05:.01;
+      if(name==='phase'){const t=clamp(currentPhase+(['ArrowLeft','ArrowDown'].includes(event.key)?-step:step));const point=phasePoint(points,t);emitTrajectory({handle:name},'move',point,t);}
+      else{const before=points[name==='origin'?0:points.length-1],point={x:clamp(before.x+({'ArrowLeft':-step,'ArrowRight':step}[event.key]??0)),y:clamp(before.y+({'ArrowUp':-step,'ArrowDown':step}[event.key]??0))};emitTrajectory({handle:name},'start',before);emitTrajectory({handle:name},'move',point);emitTrajectory({handle:name},'end',point);}
+      return;
+    }
+    const node=event.target.closest?.('[data-scene-object]'),record=node&&objectRecords.get(node.dataset.sceneObject);
+    if(record&&['ArrowLeft','ArrowRight','ArrowUp','ArrowDown'].includes(event.key)&&typeof onObjectDrag==='function'){
+      event.preventDefault();announceSelection(record);const step=event.shiftKey?.05:.01;
+      const point={x:clamp(record.point.x+({'ArrowLeft':-step,'ArrowRight':step}[event.key]??0)),y:clamp(record.point.y+({'ArrowUp':-step,'ArrowDown':step}[event.key]??0))};
+      for(const phase of ['start','move','end'])onObjectDrag({id:record.id,kind:record.kind,point:phase==='start'?{...record.point}:{...point},phase});
+    }else if((record||event.target.closest?.('[data-select]'))&&['Enter',' '].includes(event.key)){event.preventDefault();select(event);}
+  });
   return {
     render,
+    getObjectPositions:()=>Object.freeze(Array.from(objectRecords.values()).map(record=>Object.freeze({id:record.id,kind:record.kind,point:Object.freeze({...record.point})}))),
     getSvgMarkup:()=>svgElement.outerHTML,
-    destroy(){if(destroyed)return;destroyed=true;disposers.forEach(dispose=>dispose());if(drag&&sunControl.hasPointerCapture?.(drag.pointerId))sunControl.releasePointerCapture(drag.pointerId);drag=null;if(svgElement.getAttribute('data-landscape-mount')===id)svgElement.replaceChildren();},
+    destroy(){if(destroyed)return;destroyed=true;disposers.forEach(dispose=>dispose());if(drag&&sunControl.hasPointerCapture?.(drag.pointerId))sunControl.releasePointerCapture(drag.pointerId);if(interactiveDrag&&svgElement.hasPointerCapture?.(interactiveDrag.pointerId))svgElement.releasePointerCapture(interactiveDrag.pointerId);drag=null;interactiveDrag=null;objectRecords.clear();if(svgElement.getAttribute('data-landscape-mount')===id)svgElement.replaceChildren();},
   };
 }

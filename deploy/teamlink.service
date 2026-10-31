@@ -1,0 +1,32 @@
+[Unit]
+Description=TeamLink shared landscape
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=teamlink
+Group=teamlink
+WorkingDirectory=/opt/teamlink/current
+Environment=NODE_ENV=production
+EnvironmentFile=/etc/teamlink/teamlink.env
+ExecStart=/opt/teamlink/runtime/bin/node /opt/teamlink/current/server/index.mjs
+Restart=on-failure
+RestartSec=3
+KillSignal=SIGTERM
+TimeoutStopSec=40
+UMask=0077
+StateDirectory=teamlink
+StateDirectoryMode=0700
+ReadWritePaths=/var/lib/teamlink
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+NoNewPrivileges=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+LimitNOFILE=8192
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

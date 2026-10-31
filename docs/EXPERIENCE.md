@@ -1,4 +1,6 @@
-# TeamLink 使用与交接
+# TeamLink 使用与交接（历史原型）
+
+以下记录保留旧工作区与需求交接原型。当前公开体验以 [国内共享风景](https://teamlink.yaowenhu.cn/) 和仓库 README 为准。
 
 直接打开 [公开工作区](https://yaowenhu.cn/teamlink-demo/app/)，无需账号。修改留在本浏览器；公开默认内容为虚构示例。
 
