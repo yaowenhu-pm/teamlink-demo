@@ -1,7 +1,7 @@
 import {createDemo,reduceDemo,scenarios,validateSnapshot} from './demo-model.mjs';
 const root=document.querySelector('#app');
 const KEY='teamlink-public-demo-v1';
-const PUBLIC_URL='https://teamlink-handoff.yaowen-hu.chatgpt.site';
+const PUBLIC_URL='https://yaowenhu.cn/teamlink-demo/';
 const esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 let state=createDemo(new URLSearchParams(location.search).get('scene')==='login-return'?'login-return':'export-retry');
 let role='requester',prepared=false,tab='feishu',customMode=false,error='',returnOpen=false,restored=false;

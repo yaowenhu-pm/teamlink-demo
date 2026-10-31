@@ -10,7 +10,7 @@
 
 | 入口 | 地址 |
 | --- | --- |
-| 网页 / 二维码 | [teamlink-handoff.yaowen-hu.chatgpt.site](https://teamlink-handoff.yaowen-hu.chatgpt.site) |
+| 网页 / 二维码 | [yaowenhu.cn/teamlink-demo/](https://yaowenhu.cn/teamlink-demo/) |
 | 公开源码 | [yaowenhu-pm/teamlink-demo](https://github.com/yaowenhu-pm/teamlink-demo) |
 
 网页、二维码和 GitHub README 指向同一个体验地址。分享入口不会附带你的输入或演示进度。

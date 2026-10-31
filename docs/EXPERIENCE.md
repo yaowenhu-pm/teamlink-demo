@@ -26,6 +26,6 @@
 
 ## 公开入口与维护者复核
 
-体验地址：[teamlink-handoff.yaowen-hu.chatgpt.site](https://teamlink-handoff.yaowen-hu.chatgpt.site)；源码地址：[yaowenhu-pm/teamlink-demo](https://github.com/yaowenhu-pm/teamlink-demo)。两个入口都用于独立的公开演示。 页面“扫码体验”和 README 二维码使用同一网址；分享不携带当前会话内容。
+体验地址：[yaowenhu.cn/teamlink-demo/](https://yaowenhu.cn/teamlink-demo/)；源码地址：[yaowenhu-pm/teamlink-demo](https://github.com/yaowenhu-pm/teamlink-demo)。两个入口都用于独立的公开演示。 页面“扫码体验”和 README 二维码使用同一网址；分享不携带当前会话内容。
 
 本地预览：`python3 -m http.server 4328 --directory dist`；状态测试：`node --test`。发布时仅提供本项目静态文件，不接入已有团队服务、个人凭据或私人数据。公开网址、二维码、GitHub 链接及手机完整流程需在实际发布后分别核验，才能将状态改为已上线。
