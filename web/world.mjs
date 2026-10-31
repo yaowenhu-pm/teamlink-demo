@@ -6,7 +6,7 @@ const esc=value=>String(value??'').replace(/[&<>"']/g,char=>({'&':'&amp;','<':'&
 if(location.hash.startsWith('#doc='))location.replace('/legacy/app/'+location.search+location.hash);
 const STORAGE='teamlink-landscape-v1';
 let scene=createScene(),room=null,busy=false,pollTimer=null,pollDelay=1400,polling=false,localHistory=[],latestChanges=[],lastReply='',lastRequest=null;
-let selected=null,editBefore=null,leafCompare=null,phase=0,playing=true,lastFrame=performance.now(),toastTimer,hideOpening;
+let selected=null,editBefore=null,leafCompare=null,phase=0,playing=true,lastFrame=performance.now(),toastTimer,hideOpening,stageVisible=true;
 const reduced=matchMedia('(prefers-reduced-motion: reduce)').matches;if(reduced)playing=false;
 try{const raw=localStorage.getItem(STORAGE);if(raw)scene=validateScene(JSON.parse(raw));}catch{}
 const hash=new URLSearchParams(location.hash.slice(1));
@@ -26,21 +26,24 @@ function renderControls(){
  $('#send').disabled=busy;$$('.suggestions button').forEach(button=>button.disabled=busy);$('#share-world').disabled=busy&&!room;
  $('#suggestions').hidden=!!lastReply||!!room?.messages?.length;
  $('#play-leaf').textContent=playing?'Ⅱ':'▶';
- document.body.dataset.hour=String(scene.hour);document.body.dataset.trees=String(scene.trees);document.body.dataset.revision=String(room?.revision??0);
+ document.body.classList.toggle('night-scene',scene.hour<6||scene.hour>=19.5);document.body.dataset.hour=String(scene.hour);document.body.dataset.trees=String(scene.trees);document.body.dataset.revision=String(room?.revision??0);
 }
 function render(){renderer.render(scene,{phase,showTrajectory:selected==='leaf',compareScene:leafCompare});renderControls();}
 function inspector(kind){selected=kind;$('#inspector').hidden=!kind;$$('[data-inspector]').forEach(node=>node.hidden=node.dataset.inspector!==kind);$('#inspector-title').textContent=kind==='tree'?'这棵树怎样生长':kind==='leaf'?'把落叶的过程摊开看':'太阳与时间';if(kind==='leaf')leafCompare=scene;render();quietOpening();}
 const renderer=mountLandscape($('#landscape'),{onSunDrag(hour,dragPhase){if(busy)return;if(dragPhase==='start')editBefore=scene;scene=updateScene(scene,{hour});render();quietOpening();if(dragPhase==='end')finishDirect({hour});},onTreeSelect:()=>inspector('tree'),onLeafSelect:()=>inspector('leaf')});
-function animate(now){const delta=Math.min((now-lastFrame)/1000,.1);lastFrame=now;if(playing&&!document.hidden){phase=(phase+delta/7)%1;renderer.render(scene,{phase,showTrajectory:selected==='leaf',compareScene:leafCompare});if(selected==='leaf'&&$('#leaf-time')!==document.activeElement)$('#leaf-time').value=String(phase);}requestAnimationFrame(animate);}
+function animate(now){const delta=Math.min((now-lastFrame)/1000,.1);lastFrame=now;if(playing&&stageVisible&&!document.hidden){phase=(phase+delta/7)%1;renderer.render(scene,{phase,showTrajectory:selected==='leaf',compareScene:leafCompare});if(selected==='leaf'&&$('#leaf-time')!==document.activeElement)$('#leaf-time').value=String(phase);}requestAnimationFrame(animate);}
 function setConnection(text,connected=false){$('#connection').textContent=text;$('#connection').classList.toggle('connected',connected);}
 function renderMessages(){
  const messages=room?.messages??[];const last=messages.at(-1);
  if(!last){$('#conversation').innerHTML=lastReply?`<div class="speech">${esc(lastReply)}</div>`:'';return;}
  lastReply=last.reply;
- $('#conversation').innerHTML=`<div class="speech ${last.kind==='pending'?'pending':last.kind==='failed'?'failed':''}"><small>${esc(last.text.length>70?last.text.slice(0,70)+'…':last.text)}</small>${esc(last.reply)}</div>`;
- if(last.changes?.length)showChanges(last.changes);
- if(last.kind==='pending')status('正在等待豆包的实际返回，画面还没有改变。');
+ $('#conversation').innerHTML=['patch','undo'].includes(last.kind)?'':`<div class="speech ${last.kind==='pending'?'pending':last.kind==='failed'?'failed':''}"><small>${esc(last.text.length>70?last.text.slice(0,70)+'…':last.text)}</small>${esc(last.reply)}</div>`;
+ showChanges(last.changes??[]);
+ if(last.kind==='pending')status('正在理解你的想法…');
  else if(last.kind==='failed')status('这次没有应用修改，可以换一句再试。');
+ else if(last.kind==='patch')status('直接调整 · 已同步到同一风景');
+ else if(last.kind==='undo')status('已撤销 · 同一风景已更新');
+ else if(last.kind==='unsupported')status('可以再试试改变时间、风雨或树木。');
  else status(room.mode==='ai'?'豆包理解 · 修改已同步到同一风景':'调景指令模式 · 修改已同步');
 }
 function acceptState(state){
@@ -100,7 +103,7 @@ $('#instruction').addEventListener('keydown',event=>{if(event.key==='Enter'&&!ev
 $$('[data-prompt]').forEach(button=>button.addEventListener('click',()=>sendText(button.dataset.prompt)));
 $('#retry').addEventListener('click',()=>{if(lastRequest&&!busy)sendOperation(lastRequest.payload,lastRequest.undo,lastRequest);});
 $('#undo-world').addEventListener('click',()=>{if(busy)return;if(room)sendOperation({},true);else{const before=scene;scene=localHistory.pop()??scene;showChanges(sceneChanges(before,scene));saveLocal();render();toast('已撤销这次修改。');}});
-$('#show-time').addEventListener('click',()=>inspector('sun'));$('#show-leaf').addEventListener('click',()=>inspector('leaf'));$('#close-inspector').addEventListener('click',()=>{selected=null;leafCompare=null;$('#inspector').hidden=true;render();});
+$('#show-tree').addEventListener('click',()=>inspector('tree'));$('#show-time').addEventListener('click',()=>inspector('sun'));$('#show-leaf').addEventListener('click',()=>inspector('leaf'));$('#close-inspector').addEventListener('click',()=>{selected=null;leafCompare=null;$('#inspector').hidden=true;render();});
 $('#play-leaf').addEventListener('click',()=>{playing=!playing;renderControls();});$('#leaf-time').addEventListener('input',event=>{playing=false;phase=Number(event.target.value);render();});
 let shareFocus,aboutFocus;
 function qrSvg(text){const code=qrcode(0,'M');code.addData(text);code.make();const n=code.getModuleCount();let d='';for(let r=0;r<n;r++)for(let c=0;c<n;c++)if(code.isDark(r,c))d+=`M${c+4} ${r+4}h1v1h-1z`;return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${n+8} ${n+8}" shape-rendering="crispEdges" aria-hidden="true"><rect width="100%" height="100%" fill="white"/><path d="${d}" fill="#173847"/></svg>`;}
@@ -109,10 +112,23 @@ $('#close-share').addEventListener('click',()=>$('#share-dialog').close());$('#s
 $('#copy-room').addEventListener('click',async()=>{try{await navigator.clipboard.writeText($('#room-link').value);toast('已复制同一风景的编辑链接。');}catch{$('#room-link').select();toast('请手动复制上面的链接。');}});
 $('#about').addEventListener('click',()=>{aboutFocus=document.activeElement;$('#about-dialog').showModal();});$('#close-about').addEventListener('click',()=>$('#about-dialog').close());$('#about-dialog').addEventListener('close',()=>aboutFocus?.focus());
 document.addEventListener('visibilitychange',()=>{lastFrame=performance.now();if(document.hidden)clearTimeout(pollTimer);else if(room)pollRoom();});
-window.addEventListener('hashchange',()=>location.reload());
+window.addEventListener('hashchange',()=>{const next=new URLSearchParams(location.hash.slice(1));if(next.get('room')!==(room?.id??null)||next.get('key')!==(room?.token??null)||location.hash.startsWith('#doc='))location.reload();});
 render();requestAnimationFrame(animate);hideOpening=setTimeout(()=>$('#opening').classList.add('quiet'),12000);
 if(room){quietOpening();status('正在连接手机与大屏共享的风景…');ensureRoom().catch(error=>{setConnection('未连接');status(error.message);});}
 fetch('/api/health',{cache:'no-store'}).then(r=>r.json()).then(info=>{if(info.mode==='commands')$('#model-note').textContent='当前为调景指令模式，支持明确的时间、树木、风雨等命令，没有调用大模型。';}).catch(()=>{});
 
-function keyboardViewport(){const viewport=window.visualViewport;if(!viewport)return;const lift=Math.max(0,innerHeight-viewport.height-viewport.offsetTop);document.documentElement.style.setProperty('--keyboard-offset',lift+'px');document.body.classList.toggle('keyboard-open',lift>80);}
+function keyboardViewport(){const viewport=window.visualViewport;if(!viewport)return;const immersive=document.body.classList.contains('controller')||document.body.classList.contains('focus-mode');const lift=Math.max(0,innerHeight-viewport.height-viewport.offsetTop);document.documentElement.style.setProperty('--keyboard-offset',(immersive?lift:0)+'px');const wasOpen=document.body.classList.contains('keyboard-open');document.body.classList.toggle('keyboard-open',lift>80);if(!immersive&&lift>80&&!wasOpen&&document.activeElement===$('#instruction'))$('#compose').scrollIntoView({block:'center',behavior:reduced?'instant':'smooth'});}
 window.visualViewport?.addEventListener('resize',keyboardViewport);window.visualViewport?.addEventListener('scroll',keyboardViewport);$('#instruction').addEventListener('focus',quietOpening);
+
+const stage=$('#live-stage');
+function scrollToElement(id){const element=document.getElementById(id);element?.scrollIntoView({block:id==='experience'?'center':'start',behavior:reduced?'instant':'smooth'});}
+$$('[data-scroll]').forEach(button=>button.addEventListener('click',()=>scrollToElement(button.dataset.scroll)));
+$$('[data-start]').forEach(button=>button.addEventListener('click',()=>{scrollToElement('experience');$('#instruction').focus({preventScroll:true});quietOpening();}));
+$$('[data-share]').forEach(button=>button.addEventListener('click',()=>{scrollToElement('experience');$('#share-world').click();}));
+$$('[data-explore]').forEach(button=>button.addEventListener('click',()=>{scrollToElement('experience');inspector(button.dataset.explore);}));
+let focusScroll=0;
+function setFocusMode(enabled){if(enabled)focusScroll=window.scrollY;document.body.classList.toggle('focus-mode',enabled);$('#focus-world').setAttribute('aria-pressed',String(enabled));$('#focus-world').setAttribute('aria-label',enabled?'收起风景':'展开风景');if(!enabled)window.scrollTo({top:focusScroll,behavior:'instant'});keyboardViewport();render();}
+$('#focus-world').addEventListener('click',()=>setFocusMode(!document.body.classList.contains('focus-mode')));
+document.addEventListener('keydown',event=>{if(event.key==='Escape'&&!document.querySelector('dialog[open]')&&document.body.classList.contains('focus-mode'))setFocusMode(false);});
+new ResizeObserver(()=>render()).observe(stage);
+new IntersectionObserver(entries=>{stageVisible=entries[0]?.isIntersecting??true;if(stageVisible){lastFrame=performance.now();render();}},{rootMargin:'100px'}).observe(stage);
