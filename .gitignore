@@ -1,0 +1,7 @@
+node_modules/
+.env
+.env.*
+artifacts/
+.site-workflow/
+.openai/*.local.json
+.DS_Store
