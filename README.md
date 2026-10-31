@@ -1,47 +1,39 @@
-# TeamLink 公开体验
+# TeamLink 共创画布
 
-打开网页，亲手走一遍需求确认、研发接单、交付、具体退回和逐项验收。访客无需安装 Codex、登录或配置账号。
+[打开可直接编辑的作品](https://yaowenhu.cn/teamlink-demo/)
 
-这是使用虚构人物和独立样例的可交互演示：按确定规则运行，不调用实时大模型，不执行真实研发代码，不读写真实飞书或 GitHub。小林与小周分别是产品、研发的演示角色，一人可以切换体验双方。
+打开就是一个可运行的导出产品。点击界面上的文案直接改；修改数据、筛选和行为规则，同步看见请求、超时、重试与实际文件的变化。无需登录或安装。
 
-## 打开与分享
+这个版本把创作对象放到中心。没有提需、接单和验收的操作门槛；同一模型推导所有视图，修改结果不由流程次数或预设剧情决定。
 
-网页、二维码和GitHub首页指向同一个公开体验入口。
+## 可以亲手尝试
 
-| 入口 | 地址 |
-| --- | --- |
-| 网页 / 二维码 | [yaowenhu.cn/teamlink-demo/](https://yaowenhu.cn/teamlink-demo/) |
-| 公开源码 | [yaowenhu-pm/teamlink-demo](https://github.com/yaowenhu-pm/teamlink-demo) |
+- 修改标题、说明、按钮文字与状态提示，直接看产品里的变化。
+- 保留一份对照，再切换“超时后保留筛选”：默认例子的输出从10条变为原先选择的3条。
+- 只改“重试使用第一次条件”：文件可以正确，界面却仍清空输入。这两个问题可以分别讨论。
+- 把超时预算从800改为1080毫秒，观察首次请求在预算内完成，整个重试分支随之消失。
+- 改表格内容、月份、分类或金额，实际下载CSV核对。所有耗时都来自明示且可修改的计算假设。
+- 往返时间轨迹，撤销/重做，冻结对照；复制当前作品链接，让其他人打开后继续改副本。
 
-网页、二维码和 GitHub README 指向同一个体验地址。分享入口不会附带你的输入或演示进度。
+公开入口二维码打开默认作品；“分享作品”链接包含当前文案、规则和数据。分享前请确认内容适合交给收件人。
 
-![TeamLink公开体验二维码](dist/assets/teamlink-qr.png)
+![默认画布入口二维码](dist/assets/teamlink-qr.png)
 
-## 建议这样体验
+## 它目前的边界
 
-1. 选择“导出失败重试”，点击“整理交接单”，核对并修改完成标准后确认交接。
-2. 切换到虚构研发小周，接下当前版本，查看检查样例并明确提交交付。检查通过不会自动验收。
-3. 在“体验功能”中操作小样例：记住筛选条件，触发首次导出超时，观察条件被清空的问题。
-4. 具体退回相应验收项，再以研发视角补交，重新体验并逐项记录演示验收结果。
+这是浏览器内的可执行产品模型，数据是虚构起点。没有真实网络导出服务、实时大模型或任意文字生成应用。修改会保存到本浏览器；链接/JSON携带可继续编辑的副本，不提供同一房间的实时多人同步。页面不上传编辑内容。
 
-也可选择“登录后回原页”，体验取消登录返回错误位置的首轮样例。“写自己的需求”允许编辑交接内容与标准，但不会按输入生成应用或代码。
+原先的顺序交接演示保留在Git历史；现行入口以共创画布为准。真实Codex＋飞书＋GitHub服务与这个公开产品模型分别维护。
 
-输入与进度只保存在当前标签页的 `sessionStorage`，不上传；刷新可恢复任务进度，跨标签页、浏览器或设备不会自动同步。“重新体验”会重置当前演示。示例 CSV 由浏览器生成，包含虚构样例数据，不包含你的需求输入。
+## 本地运行
 
-## 本地预览与验证
-
-维护者在项目目录运行，无需安装 npm 依赖：
+无需npm依赖，现代浏览器和Node.js即可：
 
 ```sh
 python3 -m http.server 4328 --directory dist
+node --test test/canvas-model.test.mjs
 ```
 
-打开 [本地预览](http://localhost:4328)。浏览器需支持 JavaScript 与原生 ES Modules；请通过 HTTP 预览，避免直接双击 HTML。
+打开 http://localhost:4328 。设计与原则见 [PRINCIPLE_AND_SCOPE.md](docs/PRINCIPLE_AND_SCOPE.md)，操作和分享见 [EXPERIENCE.md](docs/EXPERIENCE.md)。
 
-状态规则测试使用现代 Node.js：
-
-```sh
-node --test
-```
-
-测试验证版本、角色、交付、退回、验收及存档恢复；实际页面操作与手机布局仍需浏览器检查。完整体验说明见 [docs/EXPERIENCE.md](docs/EXPERIENCE.md)。
+思路依据：Bret Victor 的 [Learnable Programming](https://worrydream.com/LearnableProgramming/)、[Explorable Explanations](https://worrydream.com/ExplorableExplanations/) 和 [Scrubbing Calculator](https://worrydream.com/ScrubbingCalculator/)。这里借鉴即时联系、可见过程与可质疑假设，不复用其程序代码。

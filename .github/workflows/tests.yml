@@ -13,4 +13,4 @@ jobs:
         with:
           node-version: '24'
       - run: node --check dist/app.mjs
-      - run: node --test
+      - run: node --test test/canvas-model.test.mjs

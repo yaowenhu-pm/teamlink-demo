@@ -7,8 +7,10 @@ Feishu documents, tokens, or test reports into this project.
 
 This experience uses deterministic demo rules, not a live LLM or real coding
 execution. Label sample Feishu/GitHub artifacts and role switching clearly.
-Keep requirements, handoff, evidence, return and acceptance meaningful and
-functional. Visitors do not install Codex or authenticate to try the demo.
+The current primary experience is direct product co-creation: edits to content,
+data and behavior must drive the actual computed preview, traces and downloaded
+files. Do not restore sequential role/confirmation gates or repair by replay count.
+Keep undo, frozen baselines and editable-copy sharing truthful. Visitors do not install Codex or authenticate to try the demo.
 Their input stays in their own browser; no analytics or server submission.
 
 Use buildless HTML/CSS/native ESM, no runtime dependencies. Node tests exercise
