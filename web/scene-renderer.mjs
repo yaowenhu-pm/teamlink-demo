@@ -4,6 +4,7 @@ import { drawingPoints, ambientMotion } from './motion-model.mjs';
 const NS = 'http://www.w3.org/2000/svg';
 const WIDTH = 1600, HEIGHT = 1000, SKY_HEIGHT = 480;
 const FOREGROUND_SCALE = .45, FOREGROUND_Y = 525;
+const FALLING_LEAF_SIZE = 16, FALLING_LEAF_SCALE = FOREGROUND_SCALE;
 const TAU = Math.PI * 2;
 let nextMount = 0;
 const clamp = (value, low = 0, high = 1) => Math.min(high, Math.max(low, value));
@@ -159,6 +160,11 @@ function pine(x, y, height) {
   const w = height * .25, p = (dx, dy) => `${fixed(x+dx*w)} ${fixed(y+dy*height)}`;
   return `M${p(0,-1)}Q${p(-.12,-.83)} ${p(-.39,-.73)}L${p(-.15,-.75)}Q${p(-.35,-.58)} ${p(-.63,-.49)}L${p(-.32,-.53)}Q${p(-.53,-.35)} ${p(-.88,-.26)}L${p(-.51,-.31)}Q${p(-.72,-.15)} ${p(-1,-.07)}Q${p(-.43,-.01)} ${p(-.04,-.06)}L${p(-.035,.045)}H${fixed(x+w*.035)}L${p(.045,-.055)}Q${p(.48,-.01)} ${p(.98,-.08)}Q${p(.64,-.18)} ${p(.47,-.32)}L${p(.83,-.27)}Q${p(.44,-.43)} ${p(.29,-.55)}L${p(.59,-.51)}Q${p(.30,-.66)} ${p(.13,-.77)}L${p(.35,-.74)}Q${p(.10,-.88)} ${p(0,-1)}Z`;
 }
+function singleLeafArtwork(r, fill = 'var(--leaf)') {
+  const blade = `M0-2C${fixed(-r*.35)} ${fixed(-r*.78)} ${fixed(-r*.18)} ${fixed(-r*1.33)} ${fixed(r*.17)} ${fixed(-r*1.5)}C${fixed(r*.62)} ${fixed(-r*.94)} ${fixed(r*.43)} ${fixed(-r*.4)} 0-2Z`;
+  const vein = `M0-2Q${fixed(r*.18)} ${fixed(-r*.66)} ${fixed(r*.17)} ${fixed(-r*1.38)}`;
+  return `<path d="${blade}" fill="${fill}"/><path d="${vein}" fill="none" stroke="var(--branch)" stroke-width=".9" stroke-opacity=".3" stroke-linecap="round"/>`;
+}
 const pointsPath = (points) => points.map((p, i) => `${i ? 'L' : 'M'}${fixed(p.x * WIDTH)} ${fixed(p.y * HEIGHT)}`).join(' ');
 function phasePoint(points, phase) {
   const position = clamp(phase) * (points.length - 1), index = Math.min(points.length - 2, Math.floor(position));
@@ -269,9 +275,9 @@ export function mountLandscape(svgElement, { onSunDrag, onTreeSelect, onLeafSele
     <g data-layer="trajectory" pointer-events="none"><path data-path="compare" fill="none" stroke="#b5ddd1" stroke-width="3" stroke-dasharray="10 12"/><path data-path="current" fill="none" stroke="#f3d99b" stroke-width="3.5"/>
       <g data-trajectory-handle="origin" role="slider" tabindex="0" aria-label="拖动落叶轨迹起点"><circle data-handle-hit fill="transparent"/><circle data-handle-dot fill="#f5fcff" stroke="#2479b3" stroke-width="2" vector-effect="non-scaling-stroke"/></g>
       <g data-trajectory-handle="target" role="slider" tabindex="0" aria-label="拖动落叶轨迹终点"><circle data-handle-hit fill="transparent"/><circle data-handle-dot fill="#f5fcff" stroke="#2479b3" stroke-width="2" vector-effect="non-scaling-stroke"/></g>
-      <g data-trajectory-handle="phase" role="slider" tabindex="0" aria-label="沿轨迹拖动落叶时间" aria-valuemin="0" aria-valuemax="1"><circle data-handle-hit fill="transparent"/><circle data-part="phase-dot" data-handle-dot fill="#ffe6a7" stroke="#244a4d" stroke-width="2" vector-effect="non-scaling-stroke"/></g>
+      <g data-trajectory-handle="phase" role="slider" tabindex="0" aria-label="沿轨迹拖动落叶时间" aria-valuemin="0" aria-valuemax="1"><circle data-handle-hit fill="transparent"/><circle data-part="phase-dot" data-handle-dot fill="none" stroke="#244a4d" stroke-width="1.25" vector-effect="non-scaling-stroke"/></g>
     </g>
-    <g data-layer="leaf" data-select="leaf" role="button" tabindex="0" aria-label="选择落叶，查看真实运动轨迹"><ellipse rx="36" ry="32" fill="transparent"/><path d="M-14 2Q-8-13 15-9Q18 9-4 12Q-12 10-14 2Z" fill="#ebc876"/><path d="M-15 10Q-3 1 11-6" fill="none" stroke="#9b8145" stroke-width="1.2"/></g>
+    <g data-layer="leaf" data-select="leaf" role="button" tabindex="0" aria-label="选择落叶，查看真实运动轨迹"><ellipse rx="52" ry="46" fill="transparent"/><g opacity=".94">${singleLeafArtwork(FALLING_LEAF_SIZE)}</g></g>
     <g data-role="sun-control" role="slider" tabindex="0" aria-label="拖动太阳或月亮改变时间" aria-valuemin="0" aria-valuemax="24"><circle r="76" fill="transparent"/><circle class="sun-affordance" r="69" fill="none" stroke="#f8ecc8" stroke-width="1.5"/><text class="sun-affordance" data-part="time-label" text-anchor="middle" y="104" font-size="15" fill="#edf2df" font-family="system-ui,sans-serif"></text></g>`;
 
   const layer = (name) => svgElement.querySelector(`[data-layer="${name}"]`);
@@ -421,8 +427,9 @@ export function mountLandscape(svgElement, { onSunDrag, onTreeSelect, onLeafSele
       if(tip.level<Math.max(0,scene.branchDepth-2))continue;
       const x = tx+tip.x*scale, y = ty+tip.y*scale;
       const r = tip.size*(tip.level===scene.branchDepth-1 ? .92 : .52);
-      const shape=`M0 4C${fixed(-r*1.18)} ${fixed(r*.2)} ${fixed(-r*.96)} ${fixed(-r*.7)} ${fixed(-r*.24)} ${fixed(-r*.82)}C${fixed(-r*.18)} ${fixed(-r*.28)} -1 0 0 4ZM1 1C${fixed(r*.12)} ${fixed(-r*.55)} ${fixed(r*.85)} ${fixed(-r*.84)} ${fixed(r*1.04)} ${fixed(-r*.72)}C${fixed(r*1.11)} ${fixed(-r*.16)} ${fixed(r*.49)} 2 1 1ZM0-2C${fixed(-r*.35)} ${fixed(-r*.78)} ${fixed(-r*.18)} ${fixed(-r*1.33)} ${fixed(r*.17)} ${fixed(-r*1.5)}C${fixed(r*.62)} ${fixed(-r*.94)} ${fixed(r*.43)} ${fixed(-r*.4)} 0-2Z`;
-      groups.push(`<path d="${shape}" transform="translate(${fixed(x)} ${fixed(y)}) rotate(${fixed(tip.rotation)})" fill="${tip.level%3 ? 'var(--leaf)' : 'var(--leaf-light)'}" opacity=".94"/>`);
+      const sides=`M0 4C${fixed(-r*1.18)} ${fixed(r*.2)} ${fixed(-r*.96)} ${fixed(-r*.7)} ${fixed(-r*.24)} ${fixed(-r*.82)}C${fixed(-r*.18)} ${fixed(-r*.28)} -1 0 0 4ZM1 1C${fixed(r*.12)} ${fixed(-r*.55)} ${fixed(r*.85)} ${fixed(-r*.84)} ${fixed(r*1.04)} ${fixed(-r*.72)}C${fixed(r*1.11)} ${fixed(-r*.16)} ${fixed(r*.49)} 2 1 1Z`;
+      const fill=tip.level%3 ? 'var(--leaf)' : 'var(--leaf-light)';
+      groups.push(`<g transform="translate(${fixed(x)} ${fixed(y)}) rotate(${fixed(tip.rotation)})" opacity=".94"><path d="${sides}" fill="${fill}"/>${singleLeafArtwork(r,fill)}</g>`);
     }
     layers.hero.innerHTML = groups.join('');
   }
@@ -539,7 +546,7 @@ export function mountLandscape(svgElement, { onSunDrag, onTreeSelect, onLeafSele
     const nextPath=[current.seed,current.wind,current.rain,JSON.stringify(current.leafOrigin),JSON.stringify(current.leafTarget),JSON.stringify(current.leafTrail)].join(':');
     if(nextPath!==pathKey){points=leafPath(current,{samples:81});layers.trajectory.querySelector('[data-path="current"]').setAttribute('d',pointsPath(points));pathKey=nextPath;}
     const p=phasePoint(points,phase),tip=drawingMode?pathStroke?.points.at(-1):null,mainLeaf=tip?{...tip,rotation:p.rotation}:p;
-    layers.leaf.setAttribute('transform',`translate(${fixed(trajectoryFrame.x+mainLeaf.x*WIDTH*trajectoryFrame.scaleX)} ${fixed(trajectoryFrame.y+mainLeaf.y*HEIGHT*trajectoryFrame.scaleY)}) rotate(${fixed(mainLeaf.rotation)}) scale(.65)`);
+    layers.leaf.setAttribute('transform',`translate(${fixed(trajectoryFrame.x+mainLeaf.x*WIDTH*trajectoryFrame.scaleX)} ${fixed(trajectoryFrame.y+mainLeaf.y*HEIGHT*trajectoryFrame.scaleY)}) rotate(${fixed(mainLeaf.rotation)}) scale(${FALLING_LEAF_SCALE})`);
     layers.leaf.style.display=current.trees?'':'none';
     layers.trajectory.style.display=showTrajectory&&current.trees&&!drawingMode?'':'none';
     const pixelsPerWorld=bounds?.width>0&&bounds?.height>0?Math.max(bounds.width/WIDTH,bounds.height/HEIGHT):1;
@@ -609,7 +616,7 @@ export function mountLandscape(svgElement, { onSunDrag, onTreeSelect, onLeafSele
     active.points=drawingPoints(active.raw);
     drawingPath.setAttribute('d',pointsPath(active.points));
     const tip=active.points.at(-1);
-    if(tip&&current.trees){const point=worldCameraPoint(active.camera,tip);layers.leaf.setAttribute('transform','translate('+fixed(point.x)+' '+fixed(point.y)+') rotate('+(points.at(-1)?.rotation??0)+') scale(.65)');layers.leaf.style.display='';svgElement.setAttribute('data-leaf-x',String(tip.x));svgElement.setAttribute('data-leaf-y',String(tip.y));}
+    if(tip&&current.trees){const point=worldCameraPoint(active.camera,tip);layers.leaf.setAttribute('transform','translate('+fixed(point.x)+' '+fixed(point.y)+') rotate('+(points.at(-1)?.rotation??0)+') scale('+FALLING_LEAF_SCALE+')');layers.leaf.style.display='';svgElement.setAttribute('data-leaf-x',String(tip.x));svgElement.setAttribute('data-leaf-y',String(tip.y));}
   }
   function emitPathDraw(phase,active=pathStroke) {
     onPathDraw?.({points:active.points.map(point=>({...point})),phase});
