@@ -4,15 +4,35 @@ import {revisionOf} from './collaboration-model.mjs';
 const $=s=>document.querySelector(s);
 const $$=s=>Array.from(document.querySelectorAll(s));
 const esc=value=>String(value??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-const ENTRY='https://yaowenhu.cn/teamlink-demo/';
+const ENTRY=new URL('./',location.href).href;
 const STORAGE='teamlink-creative-canvas-v1';
+const PROJECT_STORAGE='teamlink-project-v1';
+function sharedContextKey(document,saved,hasLegacyProject,newKey){
+ const legacyKey=PROJECT_STORAGE+'-shared-'+revisionOf(document);
+ const savedKey=typeof saved?.projectKey==='string'&&/^teamlink-project-v1-shared-[A-Za-z0-9_-]{1,140}$/.test(saved.projectKey)?saved.projectKey:null;
+ let sameDocument=false;
+ try{sameDocument=!!saved&&serializeDocument(validateDocument(saved.document))===serializeDocument(document);}catch{}
+ if(sameDocument)return {key:savedKey??legacyKey,sameDocument};
+ // Only old saves lack a stable key. Their per-revision project records remain readable.
+ return {key:!savedKey&&hasLegacyProject?legacyKey:newKey,sameDocument};
+}
+function newSharedProjectKey(){
+ const id=globalThis.crypto?.randomUUID?.()??Date.now().toString(36)+'-'+Math.random().toString(36).slice(2);
+ return PROJECT_STORAGE+'-shared-session-'+id;
+}
 let spec=createDocument(),baseline=null,undo=[],redo=[],stepId='before',lastGroup='',lastEdit=0;
+let projectKey=PROJECT_STORAGE;
 let fromShared=false,storageOkay=true,playing=null,toastTimer,errorTimer,drag=null;
 const composing=new WeakSet();
 let collaboration=null,activeView='canvas';
 try{
  if(location.hash.startsWith('#doc=')){
-  spec=decodeFragment(location.hash);fromShared=true;try{const saved=JSON.parse(sessionStorage.getItem(STORAGE+'-shared')||'null');if(saved&&serializeDocument(validateDocument(saved.document))===serializeDocument(spec))baseline=saved.baseline?validateDocument(saved.baseline):null;}catch{}
+  spec=decodeFragment(location.hash);fromShared=true;
+  let saved=null,hasLegacyProject=false;
+  try{const raw=sessionStorage.getItem(STORAGE+'-shared');if(raw&&raw.length<=100000)saved=JSON.parse(raw);}catch{}
+  try{hasLegacyProject=sessionStorage.getItem(PROJECT_STORAGE+'-shared-'+revisionOf(spec))!==null;}catch{}
+  const context=sharedContextKey(spec,saved,hasLegacyProject,newSharedProjectKey());projectKey=context.key;
+  if(context.sameDocument){try{baseline=saved.baseline?validateDocument(saved.baseline):null;}catch{}}
   $('#recovery').textContent='已打开分享的作品副本。你可以直接继续改，原作者的版本不会被覆盖。';$('#recovery').hidden=false;
  }else{
   const raw=localStorage.getItem(STORAGE);
@@ -24,7 +44,7 @@ try{
 function toast(message){$('#toast').textContent=message;$('#toast').classList.add('show');clearTimeout(toastTimer);toastTimer=setTimeout(()=>$('#toast').classList.remove('show'),3200);}
 function problem(message){$('#edit-error').textContent=message;$('#edit-error').hidden=false;clearTimeout(errorTimer);errorTimer=setTimeout(()=>$('#edit-error').hidden=true,5000);}
 function persist(){
- try{(fromShared?sessionStorage:localStorage).setItem(STORAGE+(fromShared?'-shared':''),JSON.stringify({document:spec,baseline}));}catch{storageOkay=false;}
+ try{(fromShared?sessionStorage:localStorage).setItem(STORAGE+(fromShared?'-shared':''),JSON.stringify({document:spec,baseline,...(fromShared?{projectKey}:{})}));}catch{storageOkay=false;}
  if(fromShared){try{history.replaceState(null,'',location.pathname+location.search+encodeFragment(spec));}catch{}}
 }
 function commit(next,{group='',element=null}={}){
@@ -217,6 +237,8 @@ $('#timeout').addEventListener('pointerdown',event=>{if(event.button!==0)return;
 $('#timeout').addEventListener('pointermove',event=>{if(!drag||drag.pointer!==event.pointerId)return;const delta=event.clientX-drag.x;if(Math.abs(delta)<5&&!drag.moved)return;drag.moved=true;const next=Math.max(0,Math.min(LIMITS.timeoutMs,Math.round((drag.value+delta*10)/10)*10));event.target.value=String(next);change({rules:{timeoutMs:next}},{group:'scrub-timeout',element:event.target});});
 $('#timeout').addEventListener('pointerup',()=>{drag=null;lastGroup='';});$('#timeout').addEventListener('pointercancel',()=>{drag=null;lastGroup='';});
 window.addEventListener('hashchange',()=>{if(!location.hash.startsWith('#doc='))return;try{decodeFragment(location.hash);location.reload();}catch(error){problem(error.message);}});
+// Save the association before project-only edits can occur, even without a document change.
+if(fromShared)persist();
 render();
 let projectStorage;try{projectStorage=fromShared?sessionStorage:localStorage;}catch{}
 collaboration=mountCollaboration({
@@ -224,5 +246,5 @@ collaboration=mountCollaboration({
  replaceDocument:next=>{clearPendingEditors();stepId='before';return commit(next);},
  setBaseline:next=>{baseline=validateDocument(next);persist();render();showView('verify');},
  focusAnchor,notify:toast,storage:projectStorage,
- storageKey:'teamlink-project-v1'+(fromShared?'-shared-'+revisionOf(spec):''),
+ storageKey:projectKey,
 });
