@@ -1,0 +1,14 @@
+{
+  "status": "editable-svg-fallback",
+  "figmaStatus": "unavailable_starter_mcp_quota",
+  "figmaFileKey": "ft5UfGG3NoUX4ekoZBCbXd",
+  "figmaNewNodesCreated": false,
+  "archivedPagesChanged": false,
+  "screens": {
+    "desktopCore": { "svg": "desktop-core.svg", "preview": "desktop-core.png", "width": 1440, "height": 1080 },
+    "mobileCore": { "svg": "mobile-core.svg", "preview": "mobile-core.png", "width": 390, "height": 1630 }
+  },
+  "fictionalDemoOnly": true,
+  "rasterPreviewInspected": true,
+  "appSourceChanged": false
+}

@@ -1,39 +1,47 @@
-# TeamLink 共创画布
+# TeamLink 共创工作区
 
-[打开可直接编辑的作品](https://yaowenhu.cn/teamlink-demo/)
+[打开体验](https://yaowenhu.cn/teamlink-demo/) · 无需登录，打开即可修改。
 
-打开就是一个可运行的导出产品。点击界面上的文案直接改；修改数据、筛选和行为规则，同步看见请求、超时、重试与实际文件的变化。无需登录或安装。
+围绕一个正在运行的产品原型，直接改内容、数据和行为规则，看见结果；保存不同方案，给具体版本留下批注，再把问题交给自己的 Codex。收到提案后先查看差异与计算影响，再决定采纳。
 
-这个版本把创作对象放到中心。没有提需、接单和验收的操作门槛；同一模型推导所有视图，修改结果不由流程次数或预设剧情决定。
+## 先试一次
 
-## 可以亲手尝试
+1. 打开“作品与规则”，切换“超时以后，保留选好的筛选条件”。默认例子的文件从 10 条变为最初选中的 3 条，结果在作品旁边更新。
+2. 在右侧给方案命名并保存。继续修改后，可选一个保存的版本作对照或恢复；恢复也可撤销。
+3. 在“批注”中选择内容、规则、数据或判断期望，记录问题；批注保存当时的作品快照。
+4. 在“Agent 交接”里写明确问题，复制任务给自己的 Codex，或下载任务 JSON。网页不自动启动 Agent。
+5. 把 Codex 返回的 JSON 提案粘贴或导入，检查字段差异与结果，再点击采纳。若当前作品已经改变，旧提案不能覆盖它，应基于新版本重新委托。
 
-- 修改标题、说明、按钮文字与状态提示，直接看产品里的变化。
-- 保留一份对照，再切换“超时后保留筛选”：默认例子的输出从10条变为原先选择的3条。
-- 只改“重试使用第一次条件”：文件可以正确，界面却仍清空输入。这两个问题可以分别讨论。
-- 把超时预算从800改为1080毫秒，观察首次请求在预算内完成，整个重试分支随之消失。
-- 改表格内容、月份、分类或金额，实际下载CSV核对。所有耗时都来自明示且可修改的计算假设。
-- 往返时间轨迹，撤销/重做，冻结对照；复制当前作品链接，让其他人打开后继续改副本。
+“分享作品”生成一份可继续编辑的副本链接。“导出项目”包含作品、命名方案、批注和本地活动，可通过已有飞书会话或 GitHub 附件异步传递；收件人导入后继续工作。
 
-公开入口二维码打开默认作品；“分享作品”链接包含当前文案、规则和数据。分享前请确认内容适合交给收件人。
+## 当前能力与边界
 
-![默认画布入口二维码](dist/assets/teamlink-qr.png)
+| 已实现 | 使用边界 |
+| --- | --- |
+| 内容、数据、规则直接修改；请求、轨迹、CSV同源计算 | 这是有明确字段的导出产品模型，不能生成任意应用，也不连接真实导出服务 |
+| 命名快照、版本对照、撤销/重做 | 保存在浏览器，最多12个命名版本 |
+| 关联批注与当时快照 | 署名自行填写，不代表已认证的团队成员；最多30条批注 |
+| 外部 Agent 任务包、提案预览、完整基准版本冲突拦截 | 没有内置大模型、后台执行或自动判定验收；提案作者与说明未经身份验证 |
+| 作品副本链接、完整项目包导入导出 | 异步副本协作，没有实时共享房间、自动合并或飞书／GitHub自动写入 |
 
-## 它目前的边界
+体验起点使用虚构数据。页面不上传编辑内容，没有埋点或第三方运行依赖。分享链接和项目包可携带编辑内容，请自行选择适合接收人的版本。真实团队的 Codex＋飞书＋GitHub服务与公开工作区分别维护。
 
-这是浏览器内的可执行产品模型，数据是虚构起点。没有真实网络导出服务、实时大模型或任意文字生成应用。修改会保存到本浏览器；链接/JSON携带可继续编辑的副本，不提供同一房间的实时多人同步。页面不上传编辑内容。
-
-原先的顺序交接演示保留在Git历史；现行入口以共创画布为准。真实Codex＋飞书＋GitHub服务与这个公开产品模型分别维护。
+![默认体验入口二维码](dist/assets/teamlink-qr.png)
 
 ## 本地运行
 
-无需npm依赖，现代浏览器和Node.js即可：
+无需安装依赖，现代浏览器和 Node.js 即可：
 
 ```sh
 python3 -m http.server 4328 --directory dist
-node --test test/canvas-model.test.mjs
+node --test test/canvas-model.test.mjs test/collaboration-model.test.mjs
 ```
 
-打开 http://localhost:4328 。设计与原则见 [PRINCIPLE_AND_SCOPE.md](docs/PRINCIPLE_AND_SCOPE.md)，操作和分享见 [EXPERIENCE.md](docs/EXPERIENCE.md)。
+打开 http://localhost:4328 。
 
-思路依据：Bret Victor 的 [Learnable Programming](https://worrydream.com/LearnableProgramming/)、[Explorable Explanations](https://worrydream.com/ExplorableExplanations/) 和 [Scrubbing Calculator](https://worrydream.com/ScrubbingCalculator/)。这里借鉴即时联系、可见过程与可质疑假设，不复用其程序代码。
+- [使用与交接](docs/EXPERIENCE.md)
+- [GatherThread 对照和优化决策](docs/GATHERTHREAD_REVIEW.md)
+- [验证记录](docs/VERIFICATION.md)
+- [设计原则](docs/PRINCIPLE_AND_SCOPE.md)
+
+本次借鉴 GatherThread 的项目语境、显式委托和版本审阅方式，未复制其代码或素材。直接操作原则参考 Bret Victor 的 [Learnable Programming](https://worrydream.com/LearnableProgramming/) 与 [Explorable Explanations](https://worrydream.com/ExplorableExplanations/)。
