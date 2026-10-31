@@ -18,7 +18,7 @@ export class SceneCodeError extends Error {
   constructor(message, code = 'INVALID_SCENE_CODE') { super(message); this.name = 'SceneCodeError'; this.code = code; }
 }
 
-/** Editable data, not executable JavaScript; field order follows the scene model. */
+/** Editable data, including validated leafTrail points, never executable JavaScript. */
 export function formatSceneCode(scene) {
   const checked = validateScene(scene);
   return JSON.stringify(Object.fromEntries(SCENE_CODE_FIELDS.map(key => [key, checked[key]])), null, 2);

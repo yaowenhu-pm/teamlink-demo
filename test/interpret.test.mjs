@@ -102,7 +102,9 @@ test('unknown schema/code fields, bad numeric types/bounds and unsupported patch
     { boat: 1 }, { boats: 9 }, { boats: 0, boat: true }, { boats: 2, boat: false }, { mountains: -1 },
     { mountains: 2.5 }, { boats: '3' }, { birds: 21 }, { birds: 1.5 },
     { placements: [{id: 'boat:0', x: 0.4, y: 0.7}] }, { leafOrigin: {x: 0.2, y: 0.3} },
-    { leafTarget: {x: 0.8, y: 0.9} }, { seed: 4294967296 }, JSON.parse('{"__proto__":{"polluted":true}}')];
+    { leafTarget: {x: 0.8, y: 0.9} }, {leafTrail: [{x: 0.2, y: 0.3}, {x: 0.8, y: 0.9}]},
+    {hour: 22, leafTrail: [{x: 0.2, y: 0.3}, {x: 0.8, y: 0.9}]},
+    { seed: 4294967296 }, JSON.parse('{"__proto__":{"polluted":true}}')];
   for (const patch of patches) await assert.rejects(createInterpreter(ENV, { fetcher: gateway(modelResult(patch)) })('夜晚', createScene()), code('BAD_MODEL_RESULT'));
   await assert.rejects(createInterpreter(ENV, { fetcher: gateway({ supported: false, patch: { hour: 22 }, reply: '不能执行。' }) })('夜晚', createScene()), code('BAD_MODEL_RESULT'));
   assert.equal({}.polluted, undefined);
@@ -118,7 +120,8 @@ test('AI changes only bird count while stale placement cleanup is computed by th
   const result = await interpret('不要鸟', base);
   assert.deepEqual(result.patch, {birds: 0, placements: []});
   assert.deepEqual(result.changes.map(item => item.key), ['birds', 'placements']);
-  assert.match(prompt, /birds 整数 0–20/); assert.match(prompt, /禁止在 patch 返回这三个字段/);
+  assert.match(prompt, /birds 整数 0–20/); assert.match(prompt, /禁止在 patch 返回这四个字段/);
+  assert.match(prompt, /leafTrail/);
   assert.deepEqual(updateScene(base, result.patch).placements, []);
   assert.equal(base.placements.length, 1);
 });

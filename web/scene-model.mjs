@@ -15,16 +15,18 @@ export const SCENE_LIMITS = Object.freeze({
 
 const DEFAULT_SCENE = Object.freeze({ schemaVersion: 1, seed: 72, hour: 18.3, trees: 40,
   rain: 0, wind: 0.3, branchAngle: 32, branchDepth: 5, boats: 1, mountains: 2, boat: true, flowers: 30,
-  birds: 3, placements: Object.freeze([]), leafOrigin: Object.freeze({ x: 0.32, y: 0.24 }), leafTarget: Object.freeze({ x: 0.7, y: 0.94 }) });
+  birds: 3, placements: Object.freeze([]), leafOrigin: Object.freeze({ x: 0.32, y: 0.24 }), leafTarget: Object.freeze({ x: 0.7, y: 0.94 }),
+  leafTrail: Object.freeze([]) });
 const LABELS = Object.freeze({ seed: '场景种子', hour: '时间', trees: '树木', rain: '雨量', wind: '风力',
   branchAngle: '树枝角度', branchDepth: '树枝层数', boats: '帆船数量', mountains: '山峰数量', boat: '帆船', flowers: '花朵',
-  birds: '飞鸟数量', placements: '对象位置', leafOrigin: '落叶起点', leafTarget: '落叶终点' });
+  birds: '飞鸟数量', placements: '对象位置', leafOrigin: '落叶起点', leafTarget: '落叶终点', leafTrail: '手绘落叶路径' });
 const FIELDS = Object.keys(DEFAULT_SCENE);
 const EDITABLE_FIELDS = FIELDS.filter((key) => key !== 'schemaVersion');
 const CANONICAL_FIELDS = EDITABLE_FIELDS.filter((key) => key !== 'boat');
-const LEGACY_OPTIONAL_FIELDS = ['boats', 'mountains', 'birds', 'placements', 'leafOrigin', 'leafTarget'];
+const LEGACY_OPTIONAL_FIELDS = ['boats', 'mountains', 'birds', 'placements', 'leafOrigin', 'leafTarget', 'leafTrail'];
 const OBJECT_COUNTS = Object.freeze({ tree: 'trees', boat: 'boats', mountain: 'mountains', bird: 'birds' });
 export const SCENE_PLACEMENT_LIMIT = 136;
+export const SCENE_LEAF_TRAIL_LIMIT = 40;
 const own = (object, key) => Object.prototype.hasOwnProperty.call(object, key);
 const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
 const rounded = (value) => Math.round(value * 1e6) / 1e6;
@@ -48,6 +50,7 @@ function assertRecord(value, label) {
 
 function assertValue(key, value) {
   if (key === 'placements') { checkedPlacements(value); return; }
+  if (key === 'leafTrail') { checkedLeafTrail(value); return; }
   if (key === 'leafOrigin' || key === 'leafTarget') { checkedPoint(value, LABELS[key]); return; }
   if (key === 'schemaVersion') {
     if (value !== 1) throw new SceneModelError('仅支持场景版本 1。');
@@ -64,13 +67,26 @@ function assertValue(key, value) {
   }
 }
 
-function checkedPoint(value, label = '位置') {
+function checkedPoint(value, label = '位置', decimals = 6) {
   assertRecord(value, label);
   if (Object.keys(value).length !== 2 || !own(value, 'x') || !own(value, 'y')) throw new SceneModelError(`${label}只能包含 x 和 y。`);
   for (const key of ['x', 'y']) if (typeof value[key] !== 'number' || !Number.isFinite(value[key]) || value[key] < 0 || value[key] > 1) {
     throw new SceneModelError(`${label}的 x、y 必须为 0–1 之间的有限数字。`);
   }
-  return Object.freeze({ x: rounded(value.x), y: rounded(value.y) });
+  const precision = 10 ** decimals;
+  return Object.freeze({ x: Math.round(value.x * precision) / precision, y: Math.round(value.y * precision) / precision });
+}
+
+function checkedLeafTrail(value) {
+  if (!Array.isArray(value) || Object.getPrototypeOf(value) !== Array.prototype || value.length === 1 || value.length > SCENE_LEAF_TRAIL_LIMIT ||
+      Reflect.ownKeys(value).length !== value.length + 1) throw new SceneModelError('手绘落叶路径必须为空或包含 2–40 个点的稠密数组。');
+  const copy = [];
+  for (let index = 0; index < value.length; index++) {
+    const descriptor = Object.getOwnPropertyDescriptor(value, String(index));
+    if (!descriptor?.enumerable || !own(descriptor, 'value')) throw new SceneModelError('手绘落叶路径只能包含普通数据点。');
+    copy.push(checkedPoint(descriptor.value, '手绘轨迹点', 4));
+  }
+  return Object.freeze(copy);
 }
 
 function objectIdentity(id, scene) {
@@ -115,7 +131,7 @@ export function validateScene(scene) {
   for (const key of FIELDS) {
     const value = own(scene, key) ? scene[key] : key === 'boats' ? (scene.boat ? 1 : 0) : DEFAULT_SCENE[key];
     assertValue(key, value);
-    copy[key] = key === 'placements' ? checkedPlacements(value) : key === 'leafOrigin' || key === 'leafTarget' ? checkedPoint(value, LABELS[key]) : value;
+    copy[key] = key === 'placements' ? checkedPlacements(value) : key === 'leafTrail' ? checkedLeafTrail(value) : key === 'leafOrigin' || key === 'leafTarget' ? checkedPoint(value, LABELS[key]) : value;
   }
   if (copy.boat !== (copy.boats > 0)) throw new SceneModelError('帆船显示状态必须与帆船数量一致。');
   for (const placement of copy.placements) objectIdentity(placement.id, copy);
@@ -344,6 +360,25 @@ export function solarPosition(hour) {
     visible: altitude >= -0.12, daylight: rounded(clamp((altitude + 0.1) / 1.1, 0, 1)) });
 }
 
+/** Arc length in normalized camera coordinates; zero-length segments and closed loops are valid. */
+function trailSampler(trail) {
+  const distances = [0];
+  for (let index = 1; index < trail.length; index++) {
+    distances.push(distances.at(-1) + Math.hypot(trail[index].x - trail[index - 1].x, trail[index].y - trail[index - 1].y));
+  }
+  const length = distances.at(-1);
+  return (t) => {
+    if (t === 0 || length === 0) return trail[0];
+    if (t === 1) return trail.at(-1);
+    const distance = length * t;
+    let index = 1;
+    while (index < distances.length - 1 && distances[index] < distance) index++;
+    const start = trail[index - 1], end = trail[index], span = distances[index] - distances[index - 1];
+    const fraction = span > 0 ? (distance - distances[index - 1]) / span : 0;
+    return {x: start.x + (end.x - start.x) * fraction, y: start.y + (end.y - start.y) * fraction};
+  };
+}
+
 /** Deterministic normalized trajectory; t is 0..1 and rotation is in degrees. No wall clock. */
 export function leafPath(scene, { samples = 31 } = {}) {
   const value = validateScene(scene);
@@ -352,8 +387,16 @@ export function leafPath(scene, { samples = 31 } = {}) {
   const random = () => { state = (Math.imul(1664525, state) + 1013904223) >>> 0; return state / 4294967296; };
   const phase = random() * Math.PI * 2, frequency = 1.4 + random() * 0.8;
   const origin = value.leafOrigin, target = value.leafTarget;
+  const sampleTrail = value.leafTrail.length ? trailSampler(value.leafTrail) : null;
   return Object.freeze(Array.from({ length: samples }, (_, index) => {
     const t = index / (samples - 1);
+    if (sampleTrail) {
+      const point = sampleTrail(t), first = value.leafTrail[0], last = value.leafTrail.at(-1);
+      const x = index === 0 ? origin.x : index === samples - 1 ? target.x : rounded(clamp(point.x + (origin.x - first.x) * (1 - t) + (target.x - last.x) * t, 0, 1));
+      const y = index === 0 ? origin.y : index === samples - 1 ? target.y : rounded(clamp(point.y + (origin.y - first.y) * (1 - t) + (target.y - last.y) * t, 0, 1));
+      return Object.freeze({t: rounded(t), x, y,
+        rotation: rounded(Math.sin(t * frequency * Math.PI * 2 + phase) * (10 + value.wind * 55 + value.rain * 8) * t + t * value.wind * 90)});
+    }
     const envelope = Math.sin(Math.PI * t);
     const sway = Math.sin(t * frequency * Math.PI * 2 + phase) * (0.012 + value.wind * 0.065) * envelope;
     const x = index === 0 ? origin.x : index === samples - 1 ? target.x : rounded(clamp(origin.x + (target.x - origin.x) * t + value.wind * 0.18 * envelope + sway, 0, 1));

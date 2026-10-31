@@ -5,15 +5,27 @@ import {createScene, updateScene, sceneChanges, SCENE_LIMITS} from '../web/scene
 import {SceneCodeError, SCENE_CODE_MAX_BYTES, SCENE_CODE_FIELDS, SCENE_LOGIC_SOURCES,
   formatSceneCode, parseSceneCode, sceneCodeDiff} from '../web/scene-code.mjs';
 
-test('formatted code contains fourteen canonical editable fields and roundtrips the actual scene', () => {
+test('formatted code contains fifteen canonical editable fields and roundtrips the actual scene', () => {
   const scene = updateScene(createScene(), {hour: 22, seed: 4294967295, boat: false, wind: 0.12});
   const text = formatSceneCode(scene), object = JSON.parse(text), restored = parseSceneCode(text, createScene());
-  assert.equal(SCENE_CODE_FIELDS.length, 14);
+  assert.equal(SCENE_CODE_FIELDS.length, 15);
   assert.deepEqual(Object.keys(object), Object.keys(scene).filter(key => !['schemaVersion', 'boat'].includes(key)));
   assert.equal(object.schemaVersion, undefined);
   assert.equal(object.boat, undefined); assert.equal(object.boats, 0); assert.equal(object.mountains, 2);
   assert.deepEqual(restored.patch, object); assert.deepEqual(restored.scene, scene);
   assert.ok(Object.isFrozen(restored)); assert.ok(Object.isFrozen(restored.patch)); assert.ok(Object.isFrozen(restored.scene));
+});
+
+test('scene JSON expresses the actual custom trail with round4 points and a truthful structural diff', () => {
+  const base = createScene();
+  const parsed = parseSceneCode('{"leafTrail":[{"x":0.12344999,"y":0.8},{"x":0.7,"y":0.2},{"x":0.1,"y":0.6}],"leafOrigin":{"x":0.1234,"y":0.8},"leafTarget":{"x":0.1,"y":0.6}}', base);
+  assert.deepEqual(parsed.scene.leafTrail, [{x: 0.1234, y: 0.8}, {x: 0.7, y: 0.2}, {x: 0.1, y: 0.6}]);
+  assert.deepEqual(sceneCodeDiff(base, parsed.scene).map(item => item.key), ['leafOrigin', 'leafTarget', 'leafTrail']);
+  assert.deepEqual(sceneCodeDiff(parsed.scene, parseSceneCode(formatSceneCode(parsed.scene), parsed.scene).scene), []);
+  assert.ok(Object.isFrozen(parsed.patch.leafTrail) && parsed.patch.leafTrail.every(Object.isFrozen));
+  for (const text of ['{"leafTrail":[{"x":0.2,"y":0.3}]}', '{"leafTrail":[{"x":0.2,"y":0.3},{"x":0.4,"y":2}]}', '{"leafTrail":[{"x":0.2,"y":0.3},{"x":0.4,"y":0.5,"code":"run"}]}']) {
+    assert.throws(() => parseSceneCode(text, base), SceneCodeError);
+  }
 });
 
 test('partial patches preserve omitted values and an empty patch is a valid unchanged operation', () => {
@@ -66,7 +78,8 @@ test('real JSON edits validate nested placements and leaf endpoints without fals
   for (const [kind, count] of [['tree', 100], ['boat', 8], ['mountain', 8], ['bird', 20]]) {
     for (let index = 0; index < count; index++) all.push({id: `${kind}:${index}`, x: 0.123456, y: 0.987654});
   }
-  const full = updateScene(base, {trees: 100, boats: 8, mountains: 8, birds: 20, placements: all});
+  const full = updateScene(base, {trees: 100, boats: 8, mountains: 8, birds: 20, placements: all,
+    leafTrail: Array.from({length: 40}, (_, index) => ({x: index / 40, y: 0.987654321}))});
   assert.deepEqual(parseSceneCode(formatSceneCode(full), base).scene, full, 'largest valid pretty JSON still roundtrips');
 });
 

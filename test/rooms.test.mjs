@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {DatabaseSync} from 'node:sqlite';
 import {handleRooms, ROOM_LIMITS} from '../worker/rooms.mjs';
-import {createScene, updateScene, moveSceneObject, duplicateSceneObject, removeSceneObject} from '../web/scene-model.mjs';
+import {createScene, updateScene, moveSceneObject, duplicateSceneObject, removeSceneObject, leafPath} from '../web/scene-model.mjs';
 
 // Use real SQLite to execute production SQL; only the asynchronous D1 call shape is adapted.
 class SqliteD1 {
@@ -135,7 +135,7 @@ test('legacy room rows and undo snapshots normalize counts without dropping old 
     try {
       const room = await created(env);
       const legacy = { ...createScene() };
-      for (const key of ['boats', 'mountains', 'birds', 'placements', 'leafOrigin', 'leafTarget']) delete legacy[key];
+      for (const key of ['boats', 'mountains', 'birds', 'placements', 'leafOrigin', 'leafTarget', 'leafTrail']) delete legacy[key];
       const legacyHidden = { ...legacy, boat: false };
       env.DB.database.prepare('UPDATE rooms SET scene_json = ?, history_json = ? WHERE id = ?')
         .run(JSON.stringify(legacy), JSON.stringify([legacyHidden]), room.id);
@@ -143,6 +143,7 @@ test('legacy room rows and undo snapshots normalize counts without dropping old 
       assert.equal(response.status, 200); assert.equal(state.scene.boats, 1); assert.equal(state.scene.mountains, 2);
       assert.equal(state.scene.birds, 3); assert.deepEqual(state.scene.placements, []);
       assert.deepEqual(state.scene.leafOrigin, {x: 0.32, y: 0.24});
+      assert.deepEqual(state.scene.leafTrail, []);
       response = await post(env, room, {nonce: 'new-counts', expectedRevision: 0, patch: {boats: 3, mountains: 5, trees: 0}});
       state = await response.json(); assert.equal(response.status, 200);
       assert.equal(state.scene.boats, 3); assert.equal(state.scene.mountains, 5); assert.equal(state.scene.boat, true);
@@ -186,6 +187,48 @@ test('actual room patches preserve moved objects, duplicate/delete identity and 
       assert.deepEqual(state.scene.leafTarget, {x: 0.7, y: 0.94});
     } finally { env.DB.close(); }
   });
+});
+
+test('hand-drawn loops persist through room GET, endpoint edits and undo back to a legacy empty trail', async () => {
+  await clock(async advance => {
+    const env = environment();
+    try {
+      const room = await created(env), legacy = {...room.scene}; delete legacy.leafTrail;
+      env.DB.database.prepare('UPDATE rooms SET scene_json = ? WHERE id = ?').run(JSON.stringify(legacy), room.id);
+      const leafTrail = [{x: 0.1, y: 0.1}, {x: 0.7, y: 0.1}, {x: 0.7, y: 0.7}, {x: 0.1, y: 0.7}, {x: 0.1, y: 0.1}];
+      let response = await post(env, room, {nonce: 'draw-loop', expectedRevision: 0,
+        patch: {leafTrail, leafOrigin: leafTrail[0], leafTarget: leafTrail.at(-1)}});
+      let state = await response.json(); assert.equal(response.status, 200); const drawn = state.scene;
+      assert.deepEqual(drawn.leafTrail, leafTrail);
+      response = await handleRooms(request(route(room), {token: room.token}), env);
+      assert.deepEqual((await response.json()).scene, drawn); advance();
+      response = await post(env, room, {nonce: 'move-trail-end', expectedRevision: state.revision, patch: {leafTarget: {x: 0.2, y: 0.15}}});
+      state = await response.json(); assert.equal(response.status, 200); assert.deepEqual(state.scene.leafTrail, leafTrail);
+      const last = leafPath(state.scene).at(-1); assert.deepEqual({x: last.x, y: last.y}, {x: 0.2, y: 0.15}); advance();
+      response = await post(env, room, {nonce: 'undo-trail-end', expectedRevision: state.revision}, undefined, '/undo');
+      state = await response.json(); assert.equal(response.status, 200); assert.deepEqual(state.scene, drawn); advance();
+      response = await post(env, room, {nonce: 'undo-trail-drawing', expectedRevision: state.revision}, undefined, '/undo');
+      state = await response.json(); assert.equal(response.status, 200); assert.deepEqual(state.scene, createScene());
+      assert.deepEqual(state.scene.leafTrail, []); assert.equal(env.DB.row(room.id).history_json, '[]');
+    } finally { env.DB.close(); }
+  });
+});
+
+test('the unchanged 8KB protocol accepts a maximum placement scene with forty normalized trail points', async () => {
+  const env = environment();
+  try {
+    const placements = [];
+    for (const [kind, count] of [['tree', 100], ['boat', 8], ['mountain', 8], ['bird', 20]]) {
+      for (let index = 0; index < count; index++) placements.push({id: `${kind}:${index}`, x: 0.123456789, y: 0.987654321});
+    }
+    const scene = updateScene(createScene(), {trees: 100, boats: 8, mountains: 8, birds: 20, placements,
+      leafTrail: Array.from({length: 40}, () => ({x: 0.123456789, y: 0.987654321}))});
+    const room = await created(env, {body: {scene}}), patch = {...scene}; delete patch.schemaVersion;
+    const body = {nonce: 'n'.repeat(80), expectedRevision: 0, patch};
+    assert.ok(new TextEncoder().encode(JSON.stringify(body)).byteLength < ROOM_LIMITS.bodyBytes);
+    const response = await post(env, room, body), state = await response.json();
+    assert.equal(response.status, 200); assert.deepEqual(state.scene, scene); assert.deepEqual(state.messages.at(-1).changes, []);
+  } finally { env.DB.close(); }
 });
 
 test('creation rates, active room cap, command cap and room expiry are enforced by persisted state', async () => {

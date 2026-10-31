@@ -1,12 +1,13 @@
 import { formatSceneCode, parseSceneCode, sceneCodeDiff } from './scene-code.mjs';
 
 let panelCount = 0;
-const FIELDS = Object.freeze({ sun: ['hour'], tree: ['trees', 'branchAngle', 'branchDepth', 'flowers', 'seed'], leaf: ['wind', 'rain', 'seed'] });
+const FIELDS = Object.freeze({ sun: ['hour'], tree: ['trees', 'branchAngle', 'branchDepth', 'flowers', 'seed'], leaf: ['wind', 'rain', 'seed', 'leafTrail', 'leafOrigin', 'leafTarget'] });
 const HINTS = Object.freeze({ sun: '太阳对应 hour；拖动太阳和修改这个字段使用同一个时间值。',
   tree: '树木对应 trees、branchAngle、branchDepth、flowers；seed 控制确定的布局。',
-  leaf: '落叶轨迹对应 wind、rain、seed；相同参数和时间会得到相同位置。' });
+  leaf: 'leafTrail 保存手绘路线；leafOrigin / leafTarget 可调整两端。空路线使用 wind、rain、seed 计算随风轨迹。' });
 const SOURCES = Object.freeze([{ path: '/scene-model.mjs', label: 'scene-model.mjs · 参数与运动计算' },
-  { path: '/scene-renderer.mjs', label: 'scene-renderer.mjs · 实际 SVG 绘制' }]);
+  { path: '/scene-renderer.mjs', label: 'scene-renderer.mjs · 实际 SVG 绘制' },
+  { path: '/motion-model.mjs', label: 'motion-model.mjs · 落叶、流水与飞鸟动画' }]);
 
 function element(tag, className, text) {
   const node = document.createElement(tag);
@@ -14,7 +15,7 @@ function element(tag, className, text) {
   if (text !== undefined) node.textContent = text;
   return node;
 }
-function display(value) { return typeof value === 'boolean' ? (value ? 'true' : 'false') : String(value); }
+function display(value) { return value!==null&&typeof value==='object'?JSON.stringify(value,null,2):typeof value==='boolean'?(value?'true':'false'):String(value); }
 
 /** Editable JSON data, actual before/after values and the served renderer source. Never eval. */
 export function mountCodePanel(root, { onPreview = () => {}, onCommit = () => {}, onCancel = () => {} } = {}) {

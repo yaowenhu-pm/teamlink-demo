@@ -1,0 +1,14 @@
+{
+  "duration": 15,
+  "fps": 24,
+  "frames": 360,
+  "resolution": [
+    1280,
+    720
+  ],
+  "footage": "New real browser recording of hand-drawn leaf path and boat copy/paste.",
+  "editing": "Observed actions kept in order; synchronization waits condensed. Captions mark sped-up clips.",
+  "audio": "Silent; designed for visible muted looping playback.",
+  "output": "media/teamlink-intro-v2.mp4",
+  "bytes": 189216
+}

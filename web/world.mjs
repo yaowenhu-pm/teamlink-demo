@@ -11,6 +11,7 @@ let scene=createScene(),room=null,busy=false,pollTimer=null,pollDelay=1400,polli
 let selected=null,editBefore=null,leafCompare=null,phase=0,playing=true,lastFrame=performance.now(),toastTimer,hideOpening,stageVisible=true;
 let codePanel=null,codeBefore=null,codeDraft=false,roomConnection=null,connecting=true,shareUnavailable=false,shareError='',inviteCache='',expiryTimer,directEditor=null;
 const reduced=matchMedia('(prefers-reduced-motion: reduce)').matches;if(reduced)playing=false;
+let drawingTrajectory=false,motionTime=0,motionPlaying=!reduced;
 try{const raw=localStorage.getItem(STORAGE);if(raw)scene=validateScene(JSON.parse(raw));}catch{}
 const hash=new URLSearchParams(location.hash.slice(1));
 if(/^[0-9a-f]{32}$/.test(hash.get('room')??'')&&/^[0-9a-f]{64}$/.test(hash.get('key')??''))room={id:hash.get('room'),token:hash.get('key'),revision:0,connected:false,messages:[]};
@@ -20,21 +21,40 @@ function status(text){$('#compose-status').textContent=text;}
 function quietOpening(){clearTimeout(hideOpening);$('#opening').classList.add('quiet');}
 function saveLocal(){if(!room){try{localStorage.setItem(STORAGE,JSON.stringify(scene));}catch{}}}
 function formatHour(hour){const total=Math.round((hour%24)*60);return String(Math.floor(total/60)).padStart(2,'0')+':'+String(total%60).padStart(2,'0');}
-function value(key,value){if(key==='hour')return formatHour(value);if(key==='rain'||key==='wind')return Math.round(value*100)+'%';if(key==='branchAngle')return value+'°';if(key==='placements')return value.length+' 个位置';if(key==='leafOrigin'||key==='leafTarget')return `${Math.round(value.x*100)}%, ${Math.round(value.y*100)}%`;if(typeof value==='boolean')return value?'有':'无';return String(value);}
+function value(key,value){if(key==='hour')return formatHour(value);if(key==='rain'||key==='wind')return Math.round(value*100)+'%';if(key==='branchAngle')return value+'°';if(key==='placements')return value.length+' 个位置';if(key==='leafTrail')return value.length?'手绘路线':'随风路线';if(key==='leafOrigin'||key==='leafTarget')return `${Math.round(value.x*100)}%, ${Math.round(value.y*100)}%`;if(typeof value==='boolean')return value?'有':'无';return String(value);}
 function showChanges(changes){latestChanges=changes;$('#change-chips').innerHTML=changes.map(item=>`<span>${esc(item.label)} ${esc(value(item.key,item.before))} → ${esc(value(item.key,item.after))}</span>`).join('');}
 function renderControls(){
  $('#time-label').textContent=formatHour(scene.hour);$('#hour-value').textContent=formatHour(scene.hour);$('#angle-value').textContent=scene.branchAngle+'°';$('#depth-value').textContent=scene.branchDepth;$('#wind-value').textContent=Math.round(scene.wind*100)+'%';
- for(const [id,key] of [['hour-range','hour'],['angle-range','branchAngle'],['depth-range','branchDepth'],['wind-range','wind']]){const input=$('#'+id);if(input!==document.activeElement)input.value=String(scene[key]);input.disabled=busy||connecting||codeDraft;}
- $('#undo-world').disabled=busy||connecting||codeDraft||(!room&&!localHistory.length)||(room&&!room.messages?.some(m=>m.changes?.length));
- $('#send').disabled=busy||connecting||codeDraft;$$('.suggestions button').forEach(button=>button.disabled=busy||connecting||codeDraft);$('#share-world').disabled=busy&&!room;
+ for(const [id,key] of [['hour-range','hour'],['angle-range','branchAngle'],['depth-range','branchDepth'],['wind-range','wind']]){const input=$('#'+id);if(input!==document.activeElement)input.value=String(scene[key]);input.disabled=busy||connecting||codeDraft||drawingTrajectory;}
+ $('#undo-world').disabled=busy||connecting||codeDraft||drawingTrajectory||(!room&&!localHistory.length)||(room&&!room.messages?.some(m=>m.changes?.length));
+ $('#send').disabled=busy||connecting||codeDraft||drawingTrajectory;$$('.suggestions button').forEach(button=>button.disabled=busy||connecting||codeDraft||drawingTrajectory);$('#share-world').disabled=busy&&!room;
  $('#suggestions').hidden=!!lastReply||!!room?.messages?.length;
- $('#play-leaf').textContent=playing?'Ⅱ':'▶';
+ $('#play-leaf').textContent=playing&&motionPlaying?'Ⅱ':'▶';
  document.body.classList.toggle('night-scene',scene.hour<6||scene.hour>=19.5);document.body.dataset.hour=String(scene.hour);document.body.dataset.trees=String(scene.trees);document.body.dataset.boats=String(scene.boats);document.body.dataset.mountains=String(scene.mountains);document.body.dataset.revision=String(room?.revision??0);
- codePanel?.update(scene,{before:codeBefore??scene,selected,busy:busy||connecting});
- directEditor?.update(scene,{busy:busy||connecting||codeDraft});
+ codePanel?.update(scene,{before:codeBefore??scene,selected,busy:busy||connecting||drawingTrajectory});
+ directEditor?.update(scene,{busy:busy||connecting||codeDraft,drawing:drawingTrajectory,motionPlaying});
+ $('#draw-route-hint').hidden=!drawingTrajectory;$('#live-stage').classList.toggle('drawing-trajectory',drawingTrajectory);
+ $('#reset-leaf-route').disabled=busy||connecting||codeDraft||!scene.leafTrail?.length;
 }
-function render(){renderer.render(scene,{phase,showTrajectory:selected==='leaf',compareScene:leafCompare,selectedObject:directEditor?.selectedId});if(document.body.classList.contains('mobile-code-open'))previewRenderer.render(scene,{phase,showTrajectory:selected==='leaf',compareScene:leafCompare});renderControls();}
-function inspector(kind){selected=kind;$('#inspector').hidden=!kind;$$('[data-inspector]').forEach(node=>node.hidden=node.dataset.inspector!==kind);$('#inspector-title').textContent=kind==='tree'?'这棵树怎样生长':kind==='leaf'?'把落叶的过程摊开看':'太阳与时间';if(kind==='leaf')leafCompare=scene;render();quietOpening();}
+function renderScene(){renderer.render(scene,{phase,showTrajectory:selected==='leaf',compareScene:leafCompare,selectedObject:directEditor?.selectedId,drawingTrajectory,motionTime,motionPlaying});if(document.body.classList.contains('mobile-code-open'))previewRenderer.render(scene,{phase,showTrajectory:selected==='leaf',compareScene:leafCompare,motionTime,motionPlaying});}
+function render(){renderScene();renderControls();}
+function setDrawing(enabled){
+ if(enabled&&(busy||connecting||codeDraft))return;
+ drawingTrajectory=enabled;editBefore=null;
+ if(enabled){directEditor?.select(null);selected=null;leafCompare=null;$('#inspector').hidden=true;quietOpening();}
+ render();
+}
+function pathDraw({points,phase:drawPhase}){
+ if(drawPhase==='cancel'){editBefore=null;if(drawingTrajectory){drawingTrajectory=false;render();}return;}
+ if(busy||connecting||codeDraft)return false;
+ if(drawPhase==='start'){editBefore=scene;return;}
+ if(drawPhase!=='end')return;
+ drawingTrajectory=false;
+ if(!Array.isArray(points)||points.length<2){editBefore=null;render();return;}
+ selected='leaf';leafCompare=null;phase=0;playing=true;
+ finishDirect({leafTrail:points,leafOrigin:points[0],leafTarget:points.at(-1)});
+}
+function inspector(kind){if(drawingTrajectory){drawingTrajectory=false;editBefore=null;}selected=kind;$('#inspector').hidden=!kind;$$('[data-inspector]').forEach(node=>node.hidden=node.dataset.inspector!==kind);$('#inspector-title').textContent=kind==='tree'?'这棵树怎样生长':kind==='leaf'?'把落叶的过程摊开看':'太阳与时间';if(kind==='leaf')leafCompare=scene;render();quietOpening();}
 function objectDrag({id,point,phase:dragPhase}){
  if(busy||connecting||codeDraft)return false;
  if(dragPhase==='start')editBefore=scene;
@@ -50,7 +70,7 @@ function trajectoryDrag({handle,point,phase:dragPhase}){
 }
 const renderer=mountLandscape($('#landscape'),{
  onSunDrag(hour,dragPhase){if(busy||connecting||codeDraft)return false;if(dragPhase==='start')editBefore=scene;scene=updateScene(scene,{hour});render();quietOpening();if(dragPhase==='end')finishDirect({hour});},
- onObjectSelect({id}){directEditor?.select(id);},onObjectDrag:objectDrag,onTrajectoryDrag:trajectoryDrag,
+ onObjectSelect({id}){directEditor?.select(id);},onObjectDrag:objectDrag,onTrajectoryDrag:trajectoryDrag,onPathDraw:pathDraw,
  onPhaseChange(value){playing=false;phase=value;render();},onTreeSelect:()=>inspector('tree'),onLeafSelect:()=>inspector('leaf')
 });
 const previewRenderer=mountLandscape($('#code-preview-landscape'));
@@ -58,8 +78,9 @@ directEditor=mountDirectEditor($('#live-stage'),{
  getScene:()=>scene,getObjects:()=>renderer.getObjectPositions(),onCommit:patch=>finishDirect(patch),
  onSelection(id,kind){if(kind==='tree'){inspector('tree');return;}selected=null;leafCompare=null;$('#inspector').hidden=true;render();quietOpening();},
  onInspect(kind){if(kind==='leaf')directEditor?.select(null);inspector(kind);},onUndo:()=>$('#undo-world').click(),notify:toast
+ ,onDraw:()=>setDrawing(!drawingTrajectory),onToggleMotion(){motionPlaying=!motionPlaying;render();}
 });
-function animate(now){const delta=Math.min((now-lastFrame)/1000,.1);lastFrame=now;if(playing&&stageVisible&&!document.hidden){phase=(phase+delta/7)%1;renderer.render(scene,{phase,showTrajectory:selected==='leaf',compareScene:leafCompare,selectedObject:directEditor?.selectedId});if(selected==='leaf'&&$('#leaf-time')!==document.activeElement)$('#leaf-time').value=String(phase);}requestAnimationFrame(animate);}
+function animate(now){const delta=Math.min((now-lastFrame)/1000,.1);lastFrame=now;if(motionPlaying&&stageVisible&&!document.hidden){motionTime+=delta;if(playing)phase=(phase+delta/7)%1;renderScene();if(selected==='leaf'&&$('#leaf-time')!==document.activeElement)$('#leaf-time').value=String(phase);}requestAnimationFrame(animate);}
 function setConnection(text,connected=false){$('#connection').textContent=text;$('#connection').classList.toggle('connected',connected);}
 function renderMessages(){
  const messages=room?.messages??[];const last=messages.at(-1);
@@ -115,7 +136,13 @@ async function sendOperation(payload,undo=false,retryRequest=null){
  if(busy)return;busy=true;quietOpening();$('#retry').hidden=true;renderControls();
  const operation=retryRequest&&!retryRequest.retryAsNew?retryRequest:{payload,undo,nonce:crypto.randomUUID()};
  operation.inFlight=true;operation.retryAsNew=false;lastRequest=operation;const {nonce}=operation;
- try{await ensureRoom();operation.expectedRevision??=room.revision;const wait=Math.max(0,writeNotBefore-Date.now());if(wait)await new Promise(resolve=>setTimeout(resolve,wait));writeNotBefore=Date.now()+1050;const {data,status:httpStatus}=await request('/api/rooms/'+room.id+(undo?'/undo':''),{method:'POST',body:{nonce,expectedRevision:operation.expectedRevision,...operation.payload}});acceptState(data);if(httpStatus===202&&room.messages?.some(message=>message.nonce===nonce&&message.kind==='pending')){status('请求仍在处理中，正在同步实际结果。');busy=true;}else busy=false;
+ try{await ensureRoom();operation.expectedRevision??=room.revision;const wait=Math.max(0,writeNotBefore-Date.now());if(wait)await new Promise(resolve=>setTimeout(resolve,wait));writeNotBefore=Date.now()+1050;
+ let result;
+ for(let attempt=0;;attempt++){
+  try{result=await request('/api/rooms/'+room.id+(undo?'/undo':''),{method:'POST',body:{nonce,expectedRevision:operation.expectedRevision,...operation.payload}});break;}
+  catch(error){if(attempt===0&&error.status===429&&error.code==='ROOM_RATE_LIMIT'){await new Promise(resolve=>setTimeout(resolve,1100));continue;}throw error;}
+ }
+ const {data,status:httpStatus}=result;acceptState(data);if(httpStatus===202&&room.messages?.some(message=>message.nonce===nonce&&message.kind==='pending')){status('请求仍在处理中，正在同步实际结果。');busy=true;}else busy=false;
  }catch(error){if(error.current)acceptState(error.current);else if(room?.scene){scene=validateScene(room.scene);render();}busy=false;if(error.status===409){status('风景刚在另一端变化了，已更新到最新状态。请再试这次修改。');}else{status(error.message==='The operation was aborted due to timeout'?'请求尚未确认，正在读取房间中的实际结果。':error.message);}
  if(room&&(!error.status||error.status>=500)){try{const {data}=await request('/api/rooms/'+room.id,{timeout:8000});acceptState(data);busy=data.messages?.some(m=>m.nonce===nonce&&m.kind==='pending')??false;}catch{}}
  const recorded=room?.messages?.find(message=>message.nonce===nonce);
@@ -123,7 +150,7 @@ async function sendOperation(payload,undo=false,retryRequest=null){
  $('#retry').hidden=busy||!!(recorded&&recorded.kind!=='pending')||!!(error.status&&error.status<500&&![409,429].includes(error.status));
  }finally{writeNotBefore=Math.max(writeNotBefore,Date.now()+1050);operation.inFlight=false;renderControls();schedulePoll();}
 }
-async function sendText(text){if(!text.trim()||busy||codeDraft||connecting)return;$('#instruction').value='';await sendOperation({text:text.trim()});}
+async function sendText(text){if(!text.trim()||busy||codeDraft||connecting||drawingTrajectory)return;$('#instruction').value='';await sendOperation({text:text.trim()});}
 function finishDirect(patch){
  const before=editBefore??scene;editBefore=null;codeDraft=false;const next=updateScene(before,patch);const changes=sceneChanges(before,next);scene=next;if(!changes.length){render();return;}
  codeBefore=before;
@@ -139,7 +166,10 @@ $$('[data-prompt]').forEach(button=>button.addEventListener('click',()=>sendText
 $('#retry').addEventListener('click',()=>{if(lastRequest&&!busy)sendOperation(lastRequest.payload,lastRequest.undo,lastRequest);});
 $('#undo-world').addEventListener('click',()=>{if(busy)return;if(room)sendOperation({},true);else{const before=scene;scene=localHistory.pop()??scene;showChanges(sceneChanges(before,scene));saveLocal();render();toast('已撤销这次修改。');}});
 $('#show-tree').addEventListener('click',()=>inspector('tree'));$('#show-time').addEventListener('click',()=>inspector('sun'));$('#show-leaf').addEventListener('click',()=>inspector('leaf'));$('#close-inspector').addEventListener('click',()=>{selected=null;leafCompare=null;$('#inspector').hidden=true;render();});
-$('#play-leaf').addEventListener('click',()=>{playing=!playing;renderControls();});$('#leaf-time').addEventListener('input',event=>{playing=false;phase=Number(event.target.value);render();});
+$('#play-leaf').addEventListener('click',()=>{if(!motionPlaying){playing=true;motionPlaying=true;}else playing=!playing;render();});$('#leaf-time').addEventListener('input',event=>{playing=false;phase=Number(event.target.value);render();});
+$('#draw-leaf-route').addEventListener('click',()=>setDrawing(true));$('#cancel-draw-route').addEventListener('click',()=>setDrawing(false));
+$('#reset-leaf-route').addEventListener('click',()=>{if(busy||connecting||codeDraft)return;const original=createScene();finishDirect({leafTrail:[],leafOrigin:original.leafOrigin,leafTarget:original.leafTarget});});
+document.addEventListener('keydown',event=>{if(drawingTrajectory&&event.key==='Escape'){event.preventDefault();event.stopImmediatePropagation();setDrawing(false);}},true);
 let shareFocus,aboutFocus;
 function qrSvg(text){const code=qrcode(0,'M');code.addData(text);code.make();const n=code.getModuleCount();let d='';for(let r=0;r<n;r++)for(let c=0;c<n;c++)if(code.isDark(r,c))d+=`M${c+4} ${r+4}h1v1h-1z`;return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${n+8} ${n+8}" shape-rendering="crispEdges" aria-hidden="true"><rect width="100%" height="100%" fill="white"/><path d="${d}" fill="#173847"/></svg>`;}
 function inviteUrl(){const url=new URL(location.href);url.searchParams.set('control','1');url.hash=new URLSearchParams({room:room.id,key:room.token}).toString();return url.href;}
@@ -160,7 +190,7 @@ $('#about').addEventListener('click',()=>{aboutFocus=document.activeElement;$('#
 document.addEventListener('visibilitychange',()=>{lastFrame=performance.now();if(document.hidden)clearTimeout(pollTimer);else if(room)pollRoom();});
 window.addEventListener('hashchange',()=>{const next=new URLSearchParams(location.hash.slice(1));if(next.get('room')!==(room?.id??null)||next.get('key')!==(room?.token??null)||location.hash.startsWith('#doc='))location.reload();});
 codePanel=mountCodePanel($('#code-editor-mount'),{
- onPreview(patch){if(busy||connecting)return;if(!editBefore)editBefore=scene;codeDraft=true;codeBefore=editBefore;scene=updateScene(editBefore,patch);render();status('参数预览 · 点击“应用并同步”共享这次修改。');},
+ onPreview(patch){if(busy||connecting||drawingTrajectory)return;if(!editBefore)editBefore=scene;codeDraft=true;codeBefore=editBefore;scene=updateScene(editBefore,patch);render();status('参数预览 · 点击“应用并同步”共享这次修改。');},
  async onCommit(patch){if(busy||connecting)return;if(!Object.keys(patch).length)return;finishDirect(patch);},
  onCancel(){if(editBefore){scene=editBefore;editBefore=null;}codeDraft=false;render();status(room?'已取消预览 · 显示房间中的风景':'已取消预览。');}
 });
@@ -228,7 +258,7 @@ const introVideo=$('#intro-video');
 introVideo.defaultMuted=true;introVideo.muted=true;
 let introVisible=false,introUserPaused=false,introSystemPause=false,introPlayRequest=null;
 function introEligible(){return introVisible&&!connecting&&!document.hidden&&!document.body.classList.contains('controller')&&!document.body.classList.contains('focus-mode');}
-function introCaption(){if(introVideo.error){$('#intro-video-status').textContent='视频暂未加载成功，可以使用播放控件重试。';return;}$('#intro-video-status').textContent=introVideo.paused?'已暂停 · 可使用播放控件继续':introVideo.muted?'静音自动播放 · 可直接开启声音':'正在播放 · 中文字幕与原创配乐';}
+function introCaption(){if(introVideo.error){$('#intro-video-status').textContent='视频暂未加载成功，可以使用播放控件重试。';return;}$('#intro-video-status').textContent=introVideo.paused?'已暂停 · 可使用播放控件继续':'15 秒真实操作 · 静音循环播放';}
 function updateIntroPlayback(){
  if(!introEligible()){if(!introVideo.paused){introSystemPause=true;introVideo.pause();}return;}
  if(introUserPaused||!introVideo.paused||introPlayRequest)return;

@@ -2,11 +2,11 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { SceneModelError, SCENE_LIMITS, createScene, validateScene, updateScene,
   sceneChanges, interpretInstruction, solarPosition, leafPath, moveSceneObject, duplicateSceneObject,
-  removeSceneObject, SCENE_PLACEMENT_LIMIT } from '../web/scene-model.mjs';
+  removeSceneObject, SCENE_PLACEMENT_LIMIT, SCENE_LEAF_TRAIL_LIMIT } from '../web/scene-model.mjs';
 
 const defaults = { schemaVersion: 1, seed: 72, hour: 18.3, trees: 40, rain: 0,
   wind: 0.3, branchAngle: 32, branchDepth: 5, boats: 1, mountains: 2, boat: true, flowers: 30,
-  birds: 3, placements: [], leafOrigin: {x: 0.32, y: 0.24}, leafTarget: {x: 0.7, y: 0.94} };
+  birds: 3, placements: [], leafOrigin: {x: 0.32, y: 0.24}, leafTarget: {x: 0.7, y: 0.94}, leafTrail: [] };
 const apply = (text, scene = createScene()) => {
   const parsed = interpretInstruction(text, scene);
   assert.equal(parsed.supported, true, `${text}: ${parsed.reply}`);
@@ -181,11 +181,12 @@ test('leaf time is deterministic, wind changes trajectory and rain changes progr
 
 test('legacy scenes normalize only known added fields without mutating old snapshots', () => {
   const legacy = { ...createScene() };
-  for (const key of ['boats', 'mountains', 'birds', 'placements', 'leafOrigin', 'leafTarget']) delete legacy[key];
+  for (const key of ['boats', 'mountains', 'birds', 'placements', 'leafOrigin', 'leafTarget', 'leafTrail']) delete legacy[key];
   const original = JSON.stringify(legacy), normalized = validateScene(legacy);
   assert.equal(normalized.boats, 1); assert.equal(normalized.mountains, 2); assert.equal(normalized.boat, true);
   assert.equal(normalized.birds, 3); assert.deepEqual(normalized.placements, []);
   assert.deepEqual(normalized.leafOrigin, defaults.leafOrigin); assert.deepEqual(normalized.leafTarget, defaults.leafTarget);
+  assert.deepEqual(normalized.leafTrail, []);
   assert.equal(Object.isFrozen(normalized), true); assert.equal(JSON.stringify(legacy), original);
   const hiddenBoat = validateScene({ ...legacy, boat: false });
   assert.equal(hiddenBoat.boats, 0); assert.equal(hiddenBoat.boat, false);
@@ -281,18 +282,87 @@ test('leaf endpoints directly determine every path with stable seed, time and we
   assert.notEqual(path[15].x, leafPath(updateScene(base, {leafTarget: {x: 0.4, y: 0.8}}))[15].x);
 });
 
-test('all 136 placements normalize drag precision and fit the unchanged 8KB room request bound', () => {
+test('136 placements and 40 trail points fit the unchanged 8KB room request bound', () => {
   const placements = [];
   for (const [kind, count] of [['tree', 100], ['boat', 8], ['mountain', 8], ['bird', 20]]) {
     for (let index = 0; index < count; index++) placements.push({id: `${kind}:${index}`, x: 0.12345678912345678, y: 0.9876543219876543});
   }
   assert.equal(placements.length, SCENE_PLACEMENT_LIMIT);
-  const scene = updateScene(createScene(), {trees: 100, boats: 8, mountains: 8, birds: 20, placements});
+  const leafTrail = Array.from({length: SCENE_LEAF_TRAIL_LIMIT}, () => ({x: 0.123456789, y: 0.987654321}));
+  const scene = updateScene(createScene(), {trees: 100, boats: 8, mountains: 8, birds: 20, placements, leafTrail});
   assert.equal(scene.placements[0].x, 0.123457); assert.equal(scene.placements[0].y, 0.987654);
+  assert.equal(scene.leafTrail.length, 40); assert.deepEqual(scene.leafTrail[0], {x: 0.1235, y: 0.9877});
   const creation = JSON.stringify({scene}), patch = {...scene}; delete patch.schemaVersion;
   const operation = JSON.stringify({nonce: 'n'.repeat(80), expectedRevision: Number.MAX_SAFE_INTEGER, patch});
   assert.ok(new TextEncoder().encode(creation).byteLength < 8192);
   assert.ok(new TextEncoder().encode(operation).byteLength < 8192);
+});
+
+test('custom trail validation is strict, round4, deeply immutable and compatible with old scenes', () => {
+  const base = createScene(), raw = [{x: 0.12344999, y: 0.987654321}, {x: 1, y: 0}];
+  const scene = updateScene(base, {leafTrail: raw});
+  assert.deepEqual(scene.leafTrail, [{x: 0.1234, y: 0.9877}, {x: 1, y: 0}]);
+  assert.ok(Object.isFrozen(scene.leafTrail) && scene.leafTrail.every(Object.isFrozen));
+  raw[0].x = 0.8; assert.equal(scene.leafTrail[0].x, 0.1234);
+  assert.deepEqual(sceneChanges(scene, updateScene(scene, {leafTrail: scene.leafTrail.map(point => ({...point}))})), []);
+  assert.deepEqual(sceneChanges(base, scene).map(item => item.key), ['leafTrail']);
+  const legacy = {...base}; delete legacy.leafTrail;
+  assert.deepEqual(validateScene(legacy).leafTrail, []); assert.deepEqual(sceneChanges(legacy, base), []);
+  assert.equal(updateScene(scene, {leafTrail: []}).leafTrail.length, 0);
+  assert.equal(updateScene(base, {leafTrail: Array.from({length: 40}, () => ({x: 0.2, y: 0.3}))}).leafTrail.length, 40);
+});
+
+test('custom trails reject malicious shapes, sparse arrays and accessors before reading their values', () => {
+  const base = createScene(), point = {x: 0.2, y: 0.3}; let accessed = false;
+  const invalid = [null, {}, [point], Array(2), Array.from({length: 41}, () => point),
+    [point, null], [point, []], [point, {x: 0.2}], [point, {x: 0.2, y: 0.3, code: 'execute'}],
+    [point, {x: Infinity, y: 0.3}], [point, {x: NaN, y: 0.3}], [point, {x: -0.1, y: 0.3}],
+    [point, {x: 1.1, y: 0.3}], [point, {x: '0.2', y: 0.3}], [point, {x: 0.2, y: false}],
+    [point, Object.assign(Object.create({secret: true}), point)]];
+  const extra = [point, point]; extra.extra = true; invalid.push(extra);
+  const symbolic = [point, point]; symbolic[Symbol('extra')] = true; invalid.push(symbolic);
+  const derived = [point, point]; Object.setPrototypeOf(derived, Object.create(Array.prototype)); invalid.push(derived);
+  const arrayGetter = [point, point]; Object.defineProperty(arrayGetter, '0', {enumerable: true, get() { accessed = true; return point; }}); invalid.push(arrayGetter);
+  const pointGetter = {y: 0.3}; Object.defineProperty(pointGetter, 'x', {enumerable: true, get() { accessed = true; return 0.2; }}); invalid.push([point, pointGetter]);
+  const hidden = {y: 0.3}; Object.defineProperty(hidden, 'x', {value: 0.2}); invalid.push([point, hidden]);
+  for (const leafTrail of invalid) assert.throws(() => updateScene(base, {leafTrail}), SceneModelError);
+  assert.equal(accessed, false); assert.deepEqual(base.leafTrail, []);
+});
+
+test('custom paths sample by arc length instead of input index, with repeated points safely skipped', () => {
+  for (const leafTrail of [[{x: 0.1, y: 0.2}, {x: 0.2, y: 0.2}, {x: 0.9, y: 0.2}],
+    [{x: 0.1, y: 0.2}, {x: 0.1, y: 0.2}, {x: 0.9, y: 0.2}]]) {
+    const scene = updateScene(createScene(), {leafTrail, leafOrigin: leafTrail[0], leafTarget: leafTrail.at(-1)});
+    assert.deepEqual(leafPath(scene, {samples: 5}).map(({x, y}) => ({x, y})), [
+      {x: 0.1, y: 0.2}, {x: 0.3, y: 0.2}, {x: 0.5, y: 0.2}, {x: 0.7, y: 0.2}, {x: 0.9, y: 0.2},
+    ]);
+  }
+  const point = {x: 0.4, y: 0.3};
+  const still = updateScene(createScene(), {leafTrail: [point, point], leafOrigin: point, leafTarget: point});
+  assert.ok(leafPath(still).every(({x, y}) => x === 0.4 && y === 0.3));
+});
+
+test('custom trails preserve closed loops and reverse motion without weather or seed reshaping them', () => {
+  const leafTrail = [{x: 0.1, y: 0.1}, {x: 0.7, y: 0.1}, {x: 0.7, y: 0.7}, {x: 0.1, y: 0.7}, {x: 0.1, y: 0.1}];
+  const scene = updateScene(createScene(), {leafTrail, leafOrigin: leafTrail[0], leafTarget: leafTrail.at(-1)});
+  assert.deepEqual(leafPath(scene, {samples: 5}).map(({x, y}) => ({x, y})), leafTrail);
+  const original = leafPath(scene), xy = path => path.map(({x, y}) => ({x, y}));
+  for (const patch of [{wind: 0}, {wind: 1, rain: 1}, {seed: 10000}]) assert.deepEqual(xy(leafPath(updateScene(scene, patch))), xy(original));
+  assert.notEqual(leafPath(updateScene(scene, {wind: 1, rain: 1}))[15].rotation, original[15].rotation);
+  assert.deepEqual(leafPath(scene, {samples: 61})[30], original[15]);
+  assert.ok(original.some((point, index) => index && point.y < original[index - 1].y), 'upward motion remains part of the hand-drawn line');
+  assert.ok(original.some((point, index) => index && point.x < original[index - 1].x), 'backward motion is retained');
+});
+
+test('custom trail endpoint handles deform the saved curve by blended offsets while leaving its points intact', () => {
+  const leafTrail = [{x: 0.1, y: 0.1}, {x: 0.7, y: 0.1}, {x: 0.7, y: 0.7}, {x: 0.1, y: 0.7}, {x: 0.1, y: 0.1}];
+  const base = updateScene(createScene(), {leafTrail, leafOrigin: leafTrail[0], leafTarget: leafTrail.at(-1)});
+  const moved = updateScene(base, {leafOrigin: {x: 0.15, y: 0.12}, leafTarget: {x: 0.2, y: 0.15}}), path = leafPath(moved, {samples: 5});
+  assert.deepEqual({x: path[0].x, y: path[0].y}, moved.leafOrigin);
+  assert.deepEqual({x: path.at(-1).x, y: path.at(-1).y}, moved.leafTarget);
+  assert.deepEqual({x: path[2].x, y: path[2].y}, {x: 0.775, y: 0.735});
+  assert.deepEqual(moved.leafTrail, leafTrail);
+  assert.deepEqual(sceneChanges(base, moved).map(item => item.key), ['leafOrigin', 'leafTarget']);
 });
 
 test('bird counts retain atomic finite-language behavior', () => {
