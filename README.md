@@ -1,8 +1,14 @@
-# TeamLink 共创工作区
+# TeamLink
 
-[打开体验](https://yaowenhu.cn/teamlink-demo/) · 无需登录，打开即可修改。
+[官网](https://yaowenhu.cn/teamlink-demo/) · [打开工作区](https://yaowenhu.cn/teamlink-demo/app/) · 无需登录，打开即可修改。
 
 围绕一个正在运行的产品原型，直接改内容、数据和行为规则，看见结果；保存不同方案，给具体版本留下批注，再把问题交给自己的 Codex。收到提案后先查看差异与计算影响，再决定采纳。
+
+## 官网与工作区
+
+官网首屏提供一个可直接改标题和规则的产品片段，结果由工作区同一模型计算。“带着这一版，继续改”会把当前内容带进工作区副本。官网还介绍工作方式、与已有工具的角色关系、常见问题，并提供手机体验二维码。
+
+旧根路径带 `#doc=` 的分享链接会保留内容跳转到 `app/`；正常本地作品与项目存档仍使用原存储键。
 
 ## 先试一次
 
@@ -26,7 +32,7 @@
 
 体验起点使用虚构数据。页面不上传编辑内容，没有埋点或第三方运行依赖。分享链接和项目包可携带编辑内容，请自行选择适合接收人的版本。真实团队的 Codex＋飞书＋GitHub服务与公开工作区分别维护。
 
-![默认体验入口二维码](dist/assets/teamlink-qr.png)
+![默认工作区入口二维码](dist/assets/teamlink-app-qr.png)
 
 ## 本地运行
 
@@ -34,10 +40,10 @@
 
 ```sh
 python3 -m http.server 4328 --directory dist
-node --test test/canvas-model.test.mjs test/collaboration-model.test.mjs
+node --test test/canvas-model.test.mjs test/collaboration-model.test.mjs test/shared-storage.test.mjs
 ```
 
-打开 http://localhost:4328 。
+打开 http://localhost:4328 查看官网，http://localhost:4328/app/ 打开工作区。
 
 - [使用与交接](docs/EXPERIENCE.md)
 - [GatherThread 对照和优化决策](docs/GATHERTHREAD_REVIEW.md)

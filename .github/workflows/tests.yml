@@ -14,4 +14,6 @@ jobs:
           node-version: '24'
       - run: node --check dist/app.mjs
       - run: node --check dist/collaboration-ui.mjs
-      - run: node --test test/canvas-model.test.mjs test/collaboration-model.test.mjs
+      - run: node --check dist/website.mjs
+      - run: node --check dist/legacy-route.js
+      - run: node --test test/canvas-model.test.mjs test/collaboration-model.test.mjs test/shared-storage.test.mjs
