@@ -1,41 +1,51 @@
 <!doctype html>
 <html lang="zh-CN">
 <head>
-  <meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'none'; base-uri 'none'; form-action 'self'">
-  <meta name="theme-color" content="#176d67">
-  <title>TeamLink · 少重复解释，把需求一路交到验收</title>
-  <meta name="description" content="用90秒亲手体验需求确认、研发接单、具体退回与逐项验收。独立演示数据，无需登录或安装。">
-  <meta property="og:title" content="TeamLink · 把需求一路交到验收">
-  <meta property="og:description" content="一个任务、一份确认版本，把产品和研发的交接接起来。打开即可体验。">
-  <link rel="icon" href="./assets/logo.svg" type="image/svg+xml"><link rel="stylesheet" href="./style.css">
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'none'; base-uri 'none'; form-action 'self'">
+<meta name="theme-color" content="#176d67"><title>TeamLink · 让想法与作品即时相连</title>
+<meta name="description" content="直接编辑一个正在运行的产品。改文案、数据与规则，同时看见界面、请求和文件怎样变化。无需登录，可分享继续编辑的副本。">
+<link rel="icon" type="image/svg+xml" href="./assets/logo.svg"><link rel="stylesheet" href="./style.css?v=91a5fe7c40">
 </head>
 <body>
-  <a class="skip-link" href="#workspace">跳到体验区</a>
-  <header class="site-header wrap">
-    <a class="brand" href="./" aria-label="TeamLink首页"><span class="brand-mark" aria-hidden="true"><i></i><i></i></span>TeamLink</a>
-    <nav aria-label="主导航"><span class="mode-badge"><span></span>公开体验</span><button class="text-button" id="share-open">扫码体验 <span aria-hidden="true">↗</span></button><a class="github-link" href="https://github.com/yaowenhu-pm/teamlink-demo" target="_blank" rel="noopener noreferrer">GitHub <span aria-hidden="true">↗</span></a></nav>
-  </header>
-  <main>
-    <section class="hero wrap" aria-labelledby="hero-title">
-      <p class="eyebrow">CODEX × 飞书 × GITHUB</p><h1 id="hero-title">少重复解释，<br class="mobile-break">把需求一路交到验收<span>。</span></h1>
-      <p class="hero-copy">亲手走一遍：说清需求、交给研发、带证据交付，再按同一标准验收。</p>
-      <div class="hero-bottom"><span class="time-label"><span aria-hidden="true">◷</span> 约90秒 · 无需登录或安装</span><p>独立演示数据。角色与工程记录均为样例，不会写入真实团队。</p></div>
-    </section>
-    <section class="wrap workspace" id="workspace" tabindex="-1" aria-label="TeamLink互动体验"><div id="app"><p class="loading">正在打开体验…</p></div></section>
-    <section class="wrap explanation" aria-labelledby="why-title">
-      <div><p class="eyebrow">它连接的是什么</p><h2 id="why-title">每个人继续用自己的工具，<br>交接时终于说的是同一件事。</h2></div>
-      <div class="explanation-items"><article><span>01</span><h3>确定哪一版</h3><p>确认后的需求和验收项固定下来。改要求先确认新版，旧交付不会混成新结果。</p></article><article><span>02</span><h3>明确下一步归谁</h3><p>派给研发与研发接单分开记录。交付要有说明、入口和逐项结果。</p></article><article><span>03</span><h3>让验收有依据</h3><p>检查通过以后，再记录人的实际体验。具体退回哪一项，补交时能接着往下做。</p></article></div>
-    </section>
-    <section class="wrap questions" aria-label="体验说明">
-      <details><summary>这个公开体验会调用真实 Agent、飞书或 GitHub 吗？</summary><p>本页使用可操作的演示规则、示例交付物和虚构成员，不调用实时大模型、不运行研发代码、不读写真实飞书或GitHub。它让你先体验协作机制。团队版由每位成员在自己的Codex理解与执行工作，TeamLink维护共享版本、交付和验收记录；跨设备团队接入仍需要部署与授权。</p></details>
-      <details><summary>我输入的内容保存在哪里？</summary><p>只保存在当前浏览器的演示存档中，不上传到服务器。点击“重新体验”可以清除这段演示。微信、飞书与其他浏览器之间不会自动同步。</p></details>
-      <details><summary>怎样让其他人体验？</summary><p>点击右上角“扫码体验”，复制同一网址或保存二维码；微信、飞书中也可分享这个链接。GitHub首页提供相同入口。若内置浏览器限制访问，可以选择“在浏览器打开”。</p></details>
-    </section>
-  </main>
-  <footer class="wrap site-footer"><span class="brand small">TeamLink</span><p>把个人 Agent 的工作，接成团队的一次交付。</p><span>ClawHunt · 互动体验</span></footer>
-  <dialog id="share-dialog" aria-labelledby="share-title"><button class="dialog-close" id="share-close" aria-label="关闭分享">×</button><span class="mode-badge">打开即可体验</span><h2 id="share-title">把这次交接，带给更多人。</h2><p>用微信、飞书或手机相机扫码。</p><img class="qr-image" src="./assets/teamlink-qr.png" alt="TeamLink公开体验二维码" width="236" height="236"><label class="sr-only" for="share-url">体验链接</label><input id="share-url" class="share-url" readonly value="https://yaowenhu.cn/teamlink-demo/"><div class="dialog-actions"><button id="copy-share" class="primary">复制体验链接</button><a class="secondary" download="TeamLink-体验二维码.png" href="./assets/teamlink-qr.png">保存二维码</a></div><p class="caption">分享的是体验入口，不包含你的演示输入和进度。</p></dialog>
-  <div id="toast" role="status" aria-live="polite"></div>
-  <noscript><p class="wrap error-message">体验需要浏览器开启 JavaScript。</p></noscript>
-  <script type="module" src="./app.mjs"></script>
+<a class="skip" href="#product">跳到正在编辑的产品</a>
+<header class="topbar">
+ <a class="brand" href="./"><img src="./assets/logo.svg" alt="" width="29" height="29">TeamLink<span>共创画布</span></a>
+ <div class="toolbar"><div class="undo-group"><button id="undo" class="quiet" title="撤销 Ctrl/⌘ Z" disabled>↶ <span>撤销</span></button><button id="redo" class="quiet" title="重做 Ctrl/⌘ Shift Z" disabled>↷ <span>重做</span></button></div><button id="baseline" class="button">保留这一版作对照</button><button id="share" class="button primary">分享作品 ↗</button></div>
+</header>
+<main class="workspace">
+ <section class="intro"><div><h1>直接改作品，整个过程马上改变。</h1><p>点击文字修改，拖动数值尝试。界面、请求与文件，都由你眼前的规则和数据推导。</p></div><span class="local-state" id="storage-state">本浏览器保存 · 无需登录</span></section>
+ <p id="recovery" class="notice" hidden></p>
+ <div class="creation-grid">
+  <section class="product surface" id="product" aria-label="可编辑、可运行的导出产品">
+   <div class="section-eyebrow"><span>正在一起打磨的产品 · 计算预览</span><span class="edit-hint">虚线下的文字，点一下就能改</span></div>
+   <h2 class="editable product-title" contenteditable="plaintext-only" data-content="title" role="textbox" aria-label="产品标题" data-placeholder="写一个产品名称" spellcheck="false"></h2>
+   <p class="editable product-subtitle" contenteditable="plaintext-only" data-content="subtitle" role="textbox" aria-label="产品说明" data-placeholder="直接写下你的想法" spellcheck="false"></p>
+   <div class="filter-row"><label>月份<select id="filter-month" aria-label="产品月份筛选"></select></label><label>分类<select id="filter-category" aria-label="产品分类筛选"></select></label><div class="export-split"><span contenteditable="plaintext-only" data-content="buttonLabel" role="textbox" aria-label="导出按钮文案" data-placeholder="按钮文案" spellcheck="false" class="editable button-label"></span><button id="run" aria-label="运行当前导出逻辑" title="运行当前规则">→</button></div></div>
+   <p class="original-selection" id="original-selection"></p>
+   <div class="product-status" id="product-status" aria-live="polite"><span class="status-icon" id="status-icon">○</span><div><span class="state-kicker" id="state-kicker"></span><p id="state-message"></p><p id="state-detail"></p></div><button id="download" class="button small" disabled>下载当前 CSV ↓</button></div>
+   <details class="other-copy"><summary>直接编辑其他状态的提示文案</summary><div class="copy-strip"><div><label>超时提示</label><span contenteditable="plaintext-only" data-content="errorMessage" role="textbox" aria-label="超时提示文案" data-placeholder="可以直接改提示" class="editable" spellcheck="false"></span></div><div><label>成功提示</label><span contenteditable="plaintext-only" data-content="successMessage" role="textbox" aria-label="成功提示文案" data-placeholder="可以直接改提示" class="editable" spellcheck="false"></span></div></div></details>
+   <div class="product-foot"><span id="product-matches"></span><span>点按钮右侧箭头运行；文案本身可编辑</span></div>
+  </section>
+  <aside class="rules surface" aria-label="直接修改产品行为规则">
+   <div class="section-eyebrow"><span>这件作品怎样工作</span><button id="reset" class="quiet small">从原样重新开始</button></div>
+   <label class="rule-line" id="rule-preserve"><span>超时以后，保留选好的筛选条件</span><input type="checkbox" data-path="rules.preserveFilters" class="switch" aria-label="超时后保留筛选条件"></label>
+   <div class="rule-block" id="rule-retry"><span>再次请求时，使用</span><div class="segmented" aria-label="重试参数来源"><button data-retry="visible">屏幕上的条件</button><button data-retry="original">第一次的条件</button></div></div>
+   <div class="rule-line" id="rule-timeout"><label for="timeout">等待 <input id="timeout" type="number" class="number scrub" data-path="rules.timeoutMs" min="100" max="10000" step="50" aria-label="请求超时时间"> 毫秒后超时</label><span class="drag-hint">↔ 拖动数字</span></div>
+   <div class="insight" id="insight" aria-live="polite"></div>
+   <details class="assumptions"><summary>把耗时假设也摊开看</summary><div class="formula">每次耗时 ＝（基础 <input class="number" type="number" data-path="rules.baseLatencyMs" min="0" max="5000" step="20" aria-label="基础耗时"> ＋ 每条 <input class="number" type="number" data-path="rules.perRowLatencyMs" min="0" max="2000" step="10" aria-label="每条数据耗时">）× 倍数</div><div class="network-line"><label>首次倍数 <input type="number" class="number" data-path="networkMultiplier" min="0.1" max="8" step="0.1" aria-label="首次网络耗时倍数"></label><label>重试倍数 <input type="number" class="number" data-path="retryNetworkMultiplier" min="0.1" max="8" step="0.05" aria-label="重试网络耗时倍数"></label></div><p>这是可修改的计算模型，没有发起真实网络请求。重试是否恢复也由你的数值决定。</p></details>
+  </aside>
+ </div>
+ <section class="process-section" aria-labelledby="process-title"><div class="section-heading"><div><h2 id="process-title">从第一次选择，到最后拿到的文件</h2><p>一次修改，同时重算整条轨迹。点任一段，回到那一刻看产品。</p></div><div class="legend"><span>— 当前作品</span><span id="baseline-label" hidden>┄ 保留的对照</span><button class="quiet small" id="clear-baseline" hidden>移除对照</button></div></div><div id="trace-cards" class="trace-grid"></div>
+  <div class="playback"><button id="play" class="play-button" aria-label="回放当前计算过程">▶</button><label class="sr-only" for="time-scrub">往返查看执行状态</label><input id="time-scrub" type="range" min="0" value="0" step="1"><output id="time-label"></output><span class="playback-hint">拖动时间，看见中间状态</span></div>
+ </section>
+ <section class="evidence-grid"><div class="surface case-panel"><div class="section-heading"><div><h2>换一种情境，想法还成立吗？</h2><p>同一作品、同一规则；只改变网络假设。</p></div></div><div id="contexts" class="contexts"></div></div><div class="surface assertions-panel"><div class="section-heading"><div><h2>判断依据，也可以讨论</h2><p>这里列出的是期望，不等于实际做到了。</p></div></div><div id="assertions"></div><details class="expectations"><summary>修改这些期望</summary><label><input type="checkbox" data-path="expectations.preserveFilters"> 我希望超时后输入保持不变</label><label><input type="checkbox" data-path="expectations.retryMatchesOriginal"> 我希望重试沿用第一次条件</label><label><input type="checkbox" data-path="expectations.fileMatchesOriginal"> 我希望文件与第一次选择一致</label></details></div></section>
+ <section class="data-section" aria-labelledby="data-title"><div class="section-heading"><div><h2 id="data-title">作品使用的数据</h2><p>直接改表格里的内容。筛选、耗时与下载文件一起更新。</p></div><button class="button small" id="add-row">＋ 加一条记录</button></div><div class="data-wrap surface"><table class="data-grid"><thead><tr><th>日期</th><th>分类</th><th>记录内容</th><th>金额</th><th>首次选择</th><th><span class="sr-only">删除</span></th></tr></thead><tbody id="data-body"></tbody></table></div></section>
+ <section class="output-section surface"><div class="section-heading"><div><h2>实际会拿到什么</h2><p id="file-explanation"></p></div><button id="copy-spec" class="button small">复制这版的规则与案例</button></div><div id="output-preview"></div></section>
+ <footer class="canvas-footer"><p>每位访客都能直接编辑自己的作品。分享链接会带上这一版，收到的人可继续改一份副本。</p><div><button class="quiet" id="export-document">导出作品 JSON</button><button class="quiet" id="import-document">导入作品</button><input id="import-file" type="file" accept="application/json,.json" hidden><a href="https://github.com/yaowenhu-pm/teamlink-demo" target="_blank" rel="noopener noreferrer">GitHub ↗</a></div></footer>
+ <details class="principle-note"><summary>为什么从“交任务”变成“改作品”？</summary><p>当文案、数据、行为和结果能即时对上，人就能通过尝试发现遗漏，形成新的想法。这里借鉴 Bret Victor 关于创作者与作品即时联系、让执行过程可见的工作：<a href="https://worrydream.com/LearnableProgramming/" target="_blank" rel="noopener noreferrer">Learnable Programming</a>、<a href="https://worrydream.com/ExplorableExplanations/" target="_blank" rel="noopener noreferrer">Explorable Explanations</a>。本页是一个有明确边界的可执行产品模型，不会把任意文字自动变成应用，也没有连接实时大模型或真实团队账号。</p></details>
+</main>
+<dialog id="share-dialog" aria-labelledby="share-title"><button class="dialog-close" id="close-share" aria-label="关闭分享">×</button><span class="section-eyebrow">让想法继续长出来</span><h2 id="share-title">分享一个还能继续改的作品。</h2><p>链接包含当前文案、规则与数据。收到的人打开后就能修改副本。</p><label for="share-url">这一版的编辑链接</label><textarea id="share-url" readonly rows="3"></textarea><button id="copy-link" class="button primary full">复制可继续编辑的链接 ↗</button><p class="caption">请先确认里面的内容适合分享。此模式不提供同一房间的实时多人同步。</p><div class="qr-entry"><img src="./assets/teamlink-qr.png" alt="公开画布入口二维码" width="136" height="136"><div><strong>只分享空白起点？</strong><p>这个二维码打开默认作品，<br>不携带你的修改。</p><a href="./assets/teamlink-qr.png" download="TeamLink-共创画布.png">保存入口二维码 ↓</a></div></div></dialog>
+<div class="mobile-feedback" id="mobile-feedback" aria-live="polite"><span id="mobile-result"></span><button id="show-process">看过程 ↗</button></div><div id="toast" role="status" aria-live="polite"></div><p id="edit-error" role="alert" hidden></p><noscript>这张可编辑画布需要开启 JavaScript。</noscript>
+<script type="module" src="./app.mjs?v=4e7487a8a2"></script>
 </body></html>

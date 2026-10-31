@@ -1,65 +1,191 @@
-import {createDemo,reduceDemo,scenarios,validateSnapshot} from './demo-model.mjs';
-const root=document.querySelector('#app');
-const KEY='teamlink-public-demo-v1';
-const PUBLIC_URL='https://yaowenhu.cn/teamlink-demo/';
-const esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-let state=createDemo(new URLSearchParams(location.search).get('scene')==='login-return'?'login-return':'export-retry');
-let role='requester',prepared=false,tab='feishu',customMode=false,error='',returnOpen=false,restored=false;
-let checked=new Set(),storageAvailable=true,toastTimer,draftBuffer={};
-let sample={date:'本月',category:'产品',attempts:0,result:'idle',route:'activity',message:''};
-try{const saved=sessionStorage.getItem(KEY);if(saved){const v=JSON.parse(saved);if(saved.length>600000)throw Error();state=validateSnapshot(v.state);role=['requester','owner'].includes(v.role)?v.role:nextRole();prepared=!!v.prepared;customMode=!!v.customMode;if(v.draftBuffer&&typeof v.draftBuffer==='object'&&!Array.isArray(v.draftBuffer))draftBuffer=v.draftBuffer;restored=true;}}catch{try{sessionStorage.removeItem(KEY);}catch{}error='上次的演示存档无法恢复，已为你打开新的独立体验。';}
-function stage(){return state.draft?0:state.status==='ready'?1:state.status==='in_progress'?2:state.status==='awaiting_acceptance'?3:4;}
-function nextRole(){return ['ready','in_progress'].includes(state.status)&&!state.draft?'owner':'requester';}
-function save(){try{sessionStorage.setItem(KEY,JSON.stringify({state,role,prepared,customMode,draftBuffer}));}catch{storageAvailable=false;}}
-function toast(text){const n=document.querySelector('#toast');n.textContent=text;n.classList.add('show');clearTimeout(toastTimer);toastTimer=setTimeout(()=>n.classList.remove('show'),3500);}
-function transition(action,message,{autoRole=true}={}){try{state=reduceDemo(state,{...action,role});error='';checked.clear();returnOpen=false;restored=false;if(autoRole)role=nextRole();save();render();requestAnimationFrame(()=>root.querySelector('.stage-toolbar')?.scrollIntoView({block:'start',behavior:'smooth'}));if(message)toast(message);return true;}catch(e){error=e.message||'操作暂未完成，请重试。';render();return false;}}
-const criteria=()=>state.currentRevision?.criteria??state.draft?.criteria??[];
-const currentFields=()=>({expectedRevisionId:state.currentRevisionId,expectedHeadSha:state.evidence?.headSha,submissionId:state.currentSubmissionId});
-function progress(){const active=Math.min(stage(),3);return '<ol class="stepper" aria-label="交接进度">'+['需求确认','研发接单','交付','验收'].map((t,i)=>`<li class="step ${i<active||stage()===4?'done':''} ${i===active?'active':''}" ${i===active?'aria-current="step"':''}><span class="step-num">${i<active||stage()===4?'✓':i+1}</span><span>${t}</span></li>`).join('')+'</ol>';}
-function title(){return ['先把这次要做的事说清楚','让接手的人明确接下这一版','交付时，把能验的东西一起交出来','按同一份标准，决定通过还是退回','这次交接，有始有终'][stage()];}
-function intro(){const draft=state.draft;return `<div class="panel-header"><h2>${prepared?'把完成标准一起确认':'把背景说一遍就够了'}</h2><span class="role-pill">小林 · 产品</span></div><p class="panel-subtitle">${prepared?'确认后，研发接到的就是这一版。':'选一个小场景，或改写成你想交给研发的需求。'}</p><form id="draft-form">${!prepared?`<label class="field-label" for="requirements">这次想解决什么？</label><textarea id="requirements" name="requirements" class="request-text" maxlength="4000" required placeholder="说说要做什么、哪些情况、怎样算完成…">${typeof draftBuffer.requirements==='string'?esc(draftBuffer.requirements):customMode&&draft.requirements===scenarios.find(s=>s.id===state.scenarioId).requirements?'':esc(draft.requirements)}</textarea><div class="scenario-row"><span>换个场景</span>${scenarios.map(s=>`<button type="button" class="chip ${s.id===state.scenarioId&&!customMode?'selected':''}" data-action="scenario" data-id="${s.id}">${s.id==='export-retry'?'导出失败重试':'登录后回原页'}</button>`).join('')}<button type="button" class="chip ${customMode?'selected':''}" data-action="custom">写自己的需求</button></div><div class="action-area"><button class="primary full" type="submit" name="intent" value="prepare">整理交接单 <span aria-hidden="true">→</span></button><p class="caption">按示例规则整理，可自行修改；不调用实时大模型。</p></div>`:`<label class="field-label" for="task-title">任务名称</label><input class="input-inline" id="task-title" name="title" maxlength="80" required value="${esc(draftBuffer.title??draft.title)}"><p class="message">${esc(draft.requirements)}</p><p class="field-label">怎样算完成？<span class="caption">（可以修改）</span></p>${draft.criteria.map((c,i)=>`<label class="criteria-editor"><span>${i+1}</span><textarea name="criterion-${c.id}" maxlength="300" aria-label="验收标准${i+1}" required>${esc(draftBuffer["criterion-"+c.id]??c.description)}</textarea></label>`).join('')}<p class="suggestion-note">确认目标与标准后，再交给小周。后续改要求会形成新版本。</p><div class="action-area"><button type="submit" class="primary full" name="intent" value="confirm">确认${state.currentRevision?'新版':'需求'}并交接 <span aria-hidden="true">→</span></button><button class="text-button full" style="margin-top:12px" type="button" data-action="edit-input">返回修改需求</button></div>`}</form>`;}
-function ready(){return `<div class="panel-header"><h2>接手时，背景已经齐了。</h2><span class="role-pill">小周 · 研发</span></div><p class="panel-subtitle">你现在扮演小周，读取小林确认的第${state.currentRevision.number}版需求。</p><div class="message"><strong>${esc(state.currentRevision.title)}</strong><br>${esc(state.currentRevision.requirements)}</div><div class="info-note">“分给我”与“我接下了”分别记录。接单后，双方知道接的是哪一版。</div><ul class="summary-lines"><li><span>✓</span>目标与完成标准已经确认</li><li><span>✓</span>同一份任务出现在共享记录里</li><li><span>○</span>等待小周接下当前版本</li></ul><div class="action-area"><button class="primary full" data-action="claim">我接下这一版 <span aria-hidden="true">→</span></button><p class="caption">切换角色用于体验；小周是虚构研发成员。</p></div>`;}
-function work(){const returned=state.decisions.some(d=>d.verdict==='returned');const ready=state.evidence?.ready&&(!returned||state.evidence.headSha!==state.submissions.at(-1)?.headSha);return `<div class="panel-header"><h2>${returned?'带着具体问题，接着往下做。':'写完代码，还要交得清楚。'}</h2><span class="role-pill">小周 · 研发</span></div><p class="panel-subtitle">${returned?'上一轮退回的条目和原因会保留，补交不用再讲一遍背景。':'交付包括修改说明、体验入口和每一项完成标准。'}</p>${returned?`<div class="warning-note"><strong>上一轮具体退回</strong><br>${state.decisions.filter(d=>d.verdict==='returned').at(-1).criterionResults.map(x=>esc(criteria().find(c=>c.id===x.criterionId)?.description)+ '：'+esc(x.note)).join('<br>')}</div>`:`<div class="message">示例修改已准备好。接下来由你明确提交交付，任务才会进入“待验收”。</div>`}<div class="check-state"><span class="check-dot ${state.evidence?.fixture??''}"></span><div><strong>${ready?'演示检查通过':state.evidence?.fixture==='failed'?'演示检查未通过':'先核对交付条件'}</strong><small>${state.evidence?'这是确定的示例结果，没有执行真实代码。':'检查结果与人的业务验收分别记录。'}</small></div>${ready?'✓':''}</div><div class="inline-actions"><button class="secondary" data-action="check-pass">${returned?'查看补交的检查样例':'查看通过的检查样例'}</button><button class="text-button" data-action="check-fail">试试检查失败</button></div>${state.evidence?.fixture==='failed'?'<div class="warning-note">检查未通过时，交付按钮不可用。查看通过样例后再继续。</div>':''}<p class="field-label">这次交付会一起带上</p><ul class="summary-lines"><li><span>↗</span>示例PR与明确的提交版本</li><li><span>↗</span>修改说明与可体验的示例功能</li><li><span>↗</span>${criteria().length}项验收标准的研发自检结果</li></ul><div class="action-area"><button class="primary full" data-action="submit" ${!ready?'disabled':''}>${returned?'补交本次修改':'提交交付，请小林验收'} <span aria-hidden="true">→</span></button><p class="caption">检查通过不会自动变成业务验收通过。</p></div>`;}
-function review(){return `<div class="panel-header"><h2>“做完了”，现在能对照着验。</h2><span class="role-pill">小林 · 产品</span></div><p class="panel-subtitle">先打开可操作的示例，再勾选你核对通过的项目。</p><div class="info-note">${customMode?'自定义需求展示的是交接规则；请按你修改的标准核对示例材料。':state.submissions.length===1?'这份示例交付故意留了一个问题。你可以找出来，具体退回一次。':'补交保留了上一轮的退回记录。再次核对后，决定是否通过。'}</div><button class="secondary full" style="margin-top:14px" data-action="view-artifact">打开示例，亲手验一遍 ↗</button><div class="review-items">${criteria().map((c,i)=>`<div class="review-item"><label><input type="checkbox" data-criterion="${c.id}" ${checked.has(c.id)?'checked':''}><span>${i+1}. ${esc(c.description)}</span></label><p>${esc(c.verification)}</p></div>`).join('')}</div><div class="action-area"><button class="primary full" data-action="accept" ${checked.size<criteria().filter(c=>c.required).length?'disabled':''}>记录本次演示验收通过 <span aria-hidden="true">✓</span></button><button class="text-button full" style="margin-top:14px" data-action="open-return">有一项没达到，具体退回</button></div>${returnOpen?`<div class="return-fields"><label class="field-label" for="failed-criterion">退回哪一项？</label><select id="failed-criterion">${criteria().map((c,i)=>`<option value="${c.id}" ${c.id===(state.scenarioId==='export-retry'?'AC2':'AC3')?'selected':''}>${i+1}. ${esc(c.description)}</option>`).join('')}</select><label class="field-label" for="return-note">发生了什么，应该怎样？</label><textarea id="return-note" maxlength="500">${state.scenarioId==='export-retry'?'导出超时后，原来的筛选条件被清空。请保留筛选条件，再补交。':'取消登录后回到了首页。请保留原活动，再补交。'}</textarea><button class="secondary full" data-action="return">带着这一项退回研发</button></div>`:''}<p class="caption">这里只记录演示角色的结果，不代表任何真人已经验收。</p>`;}
-function completed(){return `<div class="success-orbit" aria-hidden="true">✓</div><h2>这次交接，双方都有据可查。</h2><p class="panel-subtitle">从一句需求到逐项验收，你已经走完一轮。</p><ul class="summary-lines"><li><span>✓</span>同一份已确认的第${state.currentRevision.number}版需求</li><li><span>✓</span>小周明确接单，交付带上说明与证据</li>${state.decisions.some(d=>d.verdict==='returned')?'<li><span>✓</span>具体退回与补交历史得到保留</li>':''}<li><span>✓</span>小林逐项确认${criteria().length}个完成标准</li></ul><div class="info-note">真实团队版中，大家继续在各自Codex工作；飞书保留共享状态，GitHub保留工程证据。</div><div class="action-area"><button class="primary full" data-action="share">分享给下一位体验 <span aria-hidden="true">↗</span></button><div class="inline-actions"><button class="secondary" data-action="revise">试试中途改需求</button><button class="text-button" data-action="reset">重新体验</button></div></div>`;}
-function wrongRole(){const target=nextRole();return `<div class="role-wait"><span class="role-pill">你在${role==='owner'?'小周 · 研发':'小林 · 产品'}视角</span><h2 style="margin-top:18px">这一步，轮到${target==='owner'?'研发':'产品'}了。</h2><p>共享任务仍然是同一份。切换到对应角色，继续体验这次交接。</p><button class="primary" data-action="switch-next">切换到${target==='owner'?'小周 · 研发':'小林 · 产品'}</button><p class="caption">演示允许一人扮演双方；真实团队各用自己的身份。</p></div>`;}
-function feishuPreview(){return `<div class="integration-preview"><span class="preview-label">飞书共享记录 · 示例视图</span><h4 style="margin-top:8px">${esc(state.currentRevision?.title??'待确认后形成共享记录')}</h4><p>${state.currentRevision?'需求版本、负责人、交付和验收状态由同一份任务更新。':'这里会出现确认后的目标、版本和完成标准。'}</p><div class="preview-row"><span>当前版本</span><strong>${state.currentRevision?'第'+state.currentRevision.number+'版':'草稿'}</strong></div><div class="preview-row"><span>研发接单</span><strong>${state.ownerAckRevisionId===state.currentRevisionId&&state.currentRevisionId?'已接下当前版':'尚未接单'}</strong></div><div class="preview-row"><span>交付 / 验收</span><strong>${state.status==='accepted'?'演示验收通过':state.currentSubmission?'已交付 · 待验收':'尚未交付'}</strong></div><p class="caption">演示视图，没有创建或修改真实飞书文档。</p></div>`;}
-function githubPreview(){return `<div class="integration-preview"><span class="preview-label">GitHub工程记录 · 示例视图</span><h4 style="margin-top:8px">${state.currentRevision?'示例 Issue #12 · '+esc(state.currentRevision.title):'确认需求后，关联同一条示例 Issue'}</h4><p>需求变更更新同一Issue的需求版本，原有人工备注保留。</p>${state.evidence?`<div class="preview-row"><span>示例PR #7</span><span class="mini-tag">${state.evidence.ready?'示例检查通过':'示例检查未通过'}</span></div><p>示例提交：${esc(state.evidence.headSha)}</p>`:'<p class="caption">尚无示例PR交付记录。</p>'}${state.currentSubmission?`<p><strong>第${state.submissions.length}轮交付</strong>：${esc(state.currentSubmission.summary)}</p><p>体验入口：右侧“体验功能”页签。</p>`:''}<p class="caption">这些是虚构工程记录，没有向真实仓库提交代码。</p></div>`;}
-function artifact(){if(!state.ownerAckRevisionId)return '<div class="integration-preview"><h4>先让研发接下这一版。</h4><p>研发交付后，这里可以体验对应的示例功能。</p></div>';if(!state.currentSubmission)return '<div class="integration-preview"><h4>本轮尚未明确提交交付。</h4><p>研发提交后，这里会展示对应交付版本的示例功能。上一轮的退回原因保留在交接记录中。</p></div>';if(customMode)return '<div class="integration-preview"><h4>自定义交接材料</h4><p>'+esc(state.currentRevision.requirements)+'</p><p class="caption">这里演示的是交接规则，没有根据自定义需求生成应用或代码。</p></div>';const fixed=!!state.currentSubmission&&state.submissions.filter(s=>s.revisionId===state.currentRevisionId).length>1;return `<div class="integration-preview"><span class="preview-label">可操作的示例功能 · ${fixed?'补交版本':'首轮版本'}</span><p class="caption">这是浏览器里的小样例，不是Agent实际编写或部署的产物。</p>${state.scenarioId==='export-retry'?`<div class="mini-app"><h5>数据导出</h5><label class="sample-field">时间范围<select id="sample-date"><option ${sample.date==='本月'?'selected':''}>本月</option><option ${sample.date==='全部'?'selected':''}>全部</option></select></label><label class="sample-field">分类<select id="sample-category"><option ${sample.category==='产品'?'selected':''}>产品</option><option ${sample.category==='研发'?'selected':''}>研发</option><option ${sample.category==='全部'?'selected':''}>全部</option></select></label><div class="sample-buttons"><button class="secondary" data-action="sample-export">${sample.result==='error'?'重试导出':'导出示例文件'}</button>${sample.result==='success'?'<button class="primary" data-action="download-csv">下载CSV样例</button>':''}</div>${sample.result==='error'?'<div class="sample-output">导出超时，请重试。</div>':sample.result==='success'?'<div class="sample-output">导出成功。\n筛选范围：'+esc(sample.date)+' / '+esc(sample.category)+'\n可以下载示例文件核对。</div>':'<p class="caption">先记住当前筛选值，再点击一次导出。</p>'}<p class="sample-bug">${!fixed?'首轮样例包含一个缺陷：留意超时后筛选值。':'补交样例：超时后会保留筛选值。'}</p></div>`:`<div class="mini-app"><h5>${sample.route==='login'?'演示登录':sample.route==='home'?'首页':sample.route==='signup'?'原活动 · 报名页':'周末设计工作坊 · 活动详情'}</h5><p>${sample.route==='login'?'登录后继续完成原活动报名。':sample.route==='signup'?'你已回到原活动的报名页。':sample.route==='home'?'你离开了原活动。':'2026年11月 · 线下工作坊（虚构活动）'}</p><div class="sample-buttons">${sample.route==='login'?'<button class="primary" data-action="sample-login-success">模拟登录成功</button><button class="secondary" data-action="sample-login-fail">模拟登录失败</button><button class="text-button" data-action="sample-login-cancel">取消登录</button>':'<button class="secondary" data-action="sample-login-start">'+(sample.route==='activity'?'我要报名':'再试一次')+'</button>'}</div>${sample.message?'<div class="sample-output">'+esc(sample.message)+'</div>':''}<p class="sample-bug">${!fixed?'首轮样例：试试取消登录后回到哪里。':'补交样例：取消登录会保留原活动。'}</p></div>`}</div>`;}
-function shared(){const r=state.currentRevision??state.draft;const status={draft:'待你确认',ready:'等待接单',in_progress:'进行中',awaiting_acceptance:'待验收',accepted:'本轮已验收'}[state.status];return `<div class="panel-header"><h2>双方看到同一份任务</h2><span class="status-badge">${state.draft?'待你确认':status}</span></div><h3 class="task-title">${esc(r.title)}</h3><div class="task-meta"><div><span class="meta-label">需求版本</span><span class="meta-value">${state.currentRevision?'已确认 · 第'+state.currentRevision.number+'版':'草稿 · 尚未确认'}${state.draft&&state.currentRevision?'（新草稿待确认）':''}</span></div><div><span class="meta-label">负责人</span><span class="meta-value">小周 · 研发（虚构）</span></div></div><p class="section-label">本次范围</p><p class="task-requirements">${esc(r.requirements)}</p><p class="section-label">验收标准</p><ol class="criteria-list">${r.criteria.map((c,i)=>`<li><span class="criteria-number ${state.status==='accepted'?'check-icon':''}">${state.status==='accepted'?'✓':String(i+1).padStart(2,'0')}</span><span>${esc(c.description)}</span></li>`).join('')}</ol><div class="shared-tabs" role="tablist" aria-label="共享记录预览">${[['feishu','飞书记录'],['github','GitHub交付'],['artifact','体验功能']].map(([id,text])=>`<button role="tab" aria-selected="${tab===id}" aria-controls="preview" class="${tab===id?'selected':''}" data-action="tab" data-tab="${id}">${text}</button>`).join('')}</div><div id="preview" role="tabpanel">${tab==='feishu'?feishuPreview():tab==='github'?githubPreview():artifact()}${tab==='artifact'&&state.status==='awaiting_acceptance'?'<button class="text-button full" style="margin-top:13px" data-action="back-review">返回逐项验收 ↑</button>':''}</div>`;}
-function history(){if(!state.events.length)return '';const labels={EDIT_DRAFT:'小林整理了需求草稿',CONFIRM:'小林确认了需求版本',CLAIM:'小周接下当前版本',CHECK:'小周查看了演示检查样例',SUBMIT:'小周明确提交了交付',RETURN:'小林具体退回了未达到的标准',ACCEPT:'小林记录了演示验收结果',REVISE:'小林开始拟定需求变更'};return `<details class="history"><summary>交接记录 · ${state.revisions.length}个需求版本 / ${state.submissions.length}轮交付${state.decisions.some(d=>d.verdict==='returned')?' / 有退回记录':''}</summary><ol>${state.events.filter(x=>x.type!=='EDIT_DRAFT').map(x=>`<li><strong>${labels[x.type]}</strong>${x.type==='RETURN'?'：'+x.failedCriteria.map(c=>esc(c.note)).join('；'):''}</li>`).join('')}</ol></details>`;}
-function render(){root.dataset.status=state.status;root.dataset.stage=String(stage());root.innerHTML=`${restored?'<p class="restored">已恢复本浏览器的上次体验，可以继续；也可点击下方“重新体验”。</p>':''}${progress()}<div class="stage-toolbar"><h2 class="stage-title"><span>${String(Math.min(stage()+1,4)).padStart(2,'0')}</span>${title()}</h2><div class="role-switch" aria-label="切换演示角色"><button data-action="role" data-role="requester" class="${role==='requester'?'selected':''}" aria-pressed="${role==='requester'}">产品视角 · 小林</button><button data-action="role" data-role="owner" class="${role==='owner'?'selected':''}" aria-pressed="${role==='owner'}">研发视角 · 小周</button></div></div>${error?`<p class="error-message" role="alert">${esc(error)}</p>`:''}<div class="workspace-grid"><section class="panel action-panel" aria-label="当前步骤">${role!==nextRole()?wrongRole():state.draft?intro():state.status==='ready'?ready():state.status==='in_progress'?work():state.status==='awaiting_acceptance'?review():completed()}</section><aside class="panel shared-panel" aria-label="共享任务">${shared()}</aside></div><div class="workspace-bottom"><p>示例人物与工程记录均为虚构。${storageAvailable?'进度只保存在本次浏览器。':'浏览器禁止保存，关闭后进度不会保留。'}</p><button class="text-button" data-action="reset">重新体验 ↻</button></div>${history()}`;}
-root.addEventListener('submit',event=>{if(event.target.id!=='draft-form')return;event.preventDefault();const form=new FormData(event.target);if(!prepared){const requirements=String(form.get('requirements')??'').trim();if(!requirements){error='先写下这次想解决的需求。';render();return;}const generic=customMode?[{id:'AC1',description:'核心操作完成后，展示清楚的结果',verification:'按所描述的主要操作核对结果',required:true},{id:'AC2',description:'失败时说明原因，并提供可以继续的下一步',verification:'核对异常状态和可执行的下一步',required:true},{id:'AC3',description:'保留需求中约定的关键输入与约束',verification:'对照确认的原始需求逐项检查',required:true}]:state.draft.criteria;const title=customMode?requirements.split(/[。！？\n]/)[0].slice(0,70)||'新的团队需求':state.draft.title;if(transition({type:'EDIT_DRAFT',title,requirements,criteria:generic})){prepared=true;draftBuffer={};save();render();}}else{const cs=state.draft.criteria.map(c=>({...c,description:String(form.get('criterion-'+c.id)??'').trim()}));if(!transition({type:'EDIT_DRAFT',title:String(form.get('title')??''),criteria:cs}))return;if(transition({type:'CONFIRM'},'需求已确认。切到研发，接的是同一版。')){prepared=false;draftBuffer={};tab='feishu';sample={date:'本月',category:'产品',attempts:0,result:'idle',route:'activity',message:''};save();render();}}});
-root.addEventListener('input',event=>{const n=event.target;if(n.name==='requirements'||n.name==='title'||n.name?.startsWith('criterion-')){draftBuffer[n.name]=n.value;save();}});
-root.addEventListener('change',event=>{if(event.target.matches('[data-criterion]')){if(event.target.checked)checked.add(event.target.dataset.criterion);else checked.delete(event.target.dataset.criterion);const b=root.querySelector('[data-action="accept"]');if(b)b.disabled=checked.size<criteria().filter(c=>c.required).length;}if(event.target.id==='sample-date')sample.date=event.target.value;if(event.target.id==='sample-category')sample.category=event.target.value;});
-root.addEventListener('click',event=>{const b=event.target.closest('[data-action]');if(!b||b.disabled)return;const a=b.dataset.action;
- if(a==='role'){role=b.dataset.role;error='';save();render();return;}
- if(a==='switch-next'){role=nextRole();error='';save();render();return;}
- if(a==='tab'){tab=b.dataset.tab;render();return;}
- if(a==='view-artifact'){tab='artifact';render();root.querySelector('.shared-tabs')?.scrollIntoView({block:'start',behavior:'smooth'});return;}
- if(a==='back-review'){root.querySelector('.action-panel')?.scrollIntoView({block:'start',behavior:'smooth'});return;}
- if(a==='scenario'||a==='reset'){state=createDemo(a==='scenario'?b.dataset.id:state.scenarioId);role='requester';prepared=false;draftBuffer={};customMode=false;error='';checked.clear();returnOpen=false;restored=false;tab='feishu';sample={date:'本月',category:'产品',attempts:0,result:'idle',route:'activity',message:''};save();render();if(a==='reset')toast('已重新开始，真实团队数据不受影响。');return;}
- if(a==='custom'){state=createDemo(state.scenarioId);customMode=true;prepared=false;draftBuffer={};error='';save();render();document.querySelector('#requirements')?.focus();return;}
- if(a==='edit-input'){prepared=false;render();return;}
- if(a==='claim'){transition({type:'CLAIM',expectedRevisionId:state.currentRevisionId},'小周已接下当前版本。下一步：明确交付。');return;}
- if(a==='check-pass'||a==='check-fail'){transition({type:'CHECK',expectedRevisionId:state.currentRevisionId,fixture:a==='check-pass'?'passed':'failed',...(state.decisions.some(d=>d.verdict==='returned')&&state.evidence?.headSha===state.submissions.at(-1)?.headSha?{newHead:true}:{})},a==='check-pass'?'已查看通过样例；仍需你明确提交交付。':'检查失败，交付被阻止。',{autoRole:false});return;}
- if(a==='submit'){const fields={type:'SUBMIT',expectedRevisionId:state.currentRevisionId,expectedHeadSha:state.evidence?.headSha,summary:state.decisions.some(d=>d.verdict==='returned')?'已按具体退回项修改并补交（示例）':'按第'+state.currentRevision.number+'版需求整理修改（示例）',testEntry:'打开“体验功能”，按当前验收标准核对浏览器内示例。',criterionEvidence:criteria().map(c=>({criterionId:c.id,result:'passed',note:'虚构研发成员的演示自检结果，需产品体验后验收。'}))};if(transition(fields,'交付已提交。切回小林，按同一标准验收。')){tab='artifact';sample={date:'本月',category:'产品',attempts:0,result:'idle',route:'activity',message:''};render();}return;}
- if(a==='open-return'){returnOpen=!returnOpen;render();return;}
- if(a==='return'){const id=document.querySelector('#failed-criterion')?.value;const note=document.querySelector('#return-note')?.value??'';if(transition({type:'RETURN',...currentFields(),failedCriteria:[{criterionId:id,result:'failed',note}]},'具体问题已退回，交付与原因都保留。')){tab='github';render();}return;}
- if(a==='accept'){if(transition({type:'ACCEPT',...currentFields(),criterionResults:criteria().map(c=>({criterionId:c.id,result:checked.has(c.id)?'passed':'not_tested'}))},'本轮演示验收通过，交接记录已保留。')){tab='feishu';render();}return;}
- if(a==='revise'){if(transition({type:'REVISE',expectedRevisionId:state.currentRevisionId},'先修改草稿，确认新版后旧交付会失效。')){prepared=false;draftBuffer={};save();render();}return;}
- if(a==='share'){openShare();return;}
- const fixed=!!state.currentSubmission&&state.submissions.filter(s=>s.revisionId===state.currentRevisionId).length>1;
- if(a==='sample-export'){sample.attempts++;if(sample.attempts===1){sample.result='error';if(!fixed){sample.date='全部';sample.category='全部';}}else sample.result='success';render();return;}
- if(a==='download-csv'){const all=[['2026-10-31','产品','导出体验记录'],['2026-10-30','产品','验收标准整理'],['2026-10-29','研发','示例交付'],['2026-09-27','产品','历史示例']];const rows=all.filter(x=>(sample.category==='全部'||x[1]===sample.category)&&(sample.date==='全部'||x[0].startsWith('2026-10')));const blob=new Blob(['\uFEFF日期,分类,事项\n'+rows.map(x=>x.join(',')).join('\n')],{type:'text/csv;charset=utf-8'});const u=URL.createObjectURL(blob);const link=document.createElement('a');link.href=u;link.download='TeamLink-示例导出.csv';link.click();setTimeout(()=>URL.revokeObjectURL(u),1000);toast('已生成独立示例文件，未包含你的输入。');return;}
- if(a==='sample-login-start'){sample.route='login';sample.message='';render();return;}
- if(a==='sample-login-fail'){sample.message='演示登录失败，请重试或取消。原活动信息仍保留。';render();return;}
- if(a==='sample-login-success'){sample.route='signup';sample.message='已回到原活动的报名页。';render();return;}
- if(a==='sample-login-cancel'){sample.route=fixed?'activity':'home';sample.message=fixed?'已取消登录，仍是原活动。':'已取消登录，但返回了无关首页。';render();return;}
+import {createDocument,validateDocument,updateDocument,evaluateExport,evaluateContexts,filterRows,toCsv,serializeDocument,parseDocument,encodeFragment,decodeFragment,LIMITS} from './canvas-model.mjs';
+const $=s=>document.querySelector(s);
+const $$=s=>Array.from(document.querySelectorAll(s));
+const esc=value=>String(value??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const ENTRY='https://yaowenhu.cn/teamlink-demo/';
+const STORAGE='teamlink-creative-canvas-v1';
+let spec=createDocument(),baseline=null,undo=[],redo=[],stepId='before',lastGroup='',lastEdit=0;
+let fromShared=false,storageOkay=true,playing=null,toastTimer,errorTimer,drag=null;
+const composing=new WeakSet();
+try{
+ if(location.hash.startsWith('#doc=')){
+  spec=decodeFragment(location.hash);fromShared=true;try{const saved=JSON.parse(sessionStorage.getItem(STORAGE+'-shared')||'null');if(saved&&serializeDocument(validateDocument(saved.document))===serializeDocument(spec))baseline=saved.baseline?validateDocument(saved.baseline):null;}catch{}
+  $('#recovery').textContent='已打开分享的作品副本。你可以直接继续改，原作者的版本不会被覆盖。';$('#recovery').hidden=false;
+ }else{
+  const raw=localStorage.getItem(STORAGE);
+  if(raw){if(raw.length>100000)throw Error();const saved=JSON.parse(raw);spec=validateDocument(saved.document);baseline=saved.baseline?validateDocument(saved.baseline):null;}
+ }
+}catch{
+ $('#recovery').textContent='这份存档或分享链接无法读取，已打开默认作品。你仍可导入有效的 JSON 备份。';$('#recovery').hidden=false;
+}
+function toast(message){$('#toast').textContent=message;$('#toast').classList.add('show');clearTimeout(toastTimer);toastTimer=setTimeout(()=>$('#toast').classList.remove('show'),3200);}
+function problem(message){$('#edit-error').textContent=message;$('#edit-error').hidden=false;clearTimeout(errorTimer);errorTimer=setTimeout(()=>$('#edit-error').hidden=true,5000);}
+function persist(){
+ try{(fromShared?sessionStorage:localStorage).setItem(STORAGE+(fromShared?'-shared':''),JSON.stringify({document:spec,baseline}));}catch{storageOkay=false;}
+ if(fromShared){try{history.replaceState(null,'',location.pathname+location.search+encodeFragment(spec));}catch{}}
+}
+function commit(next,{group='',element=null}={}){
+ try{
+  const validated=validateDocument(next);if(playing)stopPlaying();
+  if(serializeDocument(spec)===serializeDocument(validated)){if(element){delete element.dataset.invalidMessage;element.removeAttribute('aria-invalid');}return true;}
+  const now=Date.now();
+  if(!group||group!==lastGroup||now-lastEdit>900){undo.push(spec);if(undo.length>60)undo.shift();}
+  redo=[];lastGroup=group;lastEdit=now;spec=validated;
+  if(element){delete element.dataset.invalidMessage;element.removeAttribute('aria-invalid');}
+  persist();render();return true;
+ }catch(error){if(element){element.dataset.invalidMessage=error.message;element.setAttribute('aria-invalid','true');}else problem(error.message);return false;}
+}
+function change(patch,options={}){try{return commit(updateDocument(spec,patch),options);}catch(error){if(options.element){options.element.dataset.invalidMessage=error.message;options.element.setAttribute('aria-invalid','true');}else problem(error.message);return false;}}
+function patchPath(path,value){const bits=path.split('.');return bits.length===1?{[bits[0]]:value}:{[bits[0]]:{[bits[1]]:value}};}
+function atPath(path){return path.split('.').reduce((v,key)=>v?.[key],spec);}
+const monthLabel=month=>month==='all'?'全部月份':month.replace(/^(\d{4})-(\d{2})$/,(m,y,n)=>y+'年'+Number(n)+'月');
+const filterLabel=f=>monthLabel(f.month)+' / '+f.category;
+const shortFilter=f=>(f.month==='all'?'全部月份':Number(f.month.slice(5))+'月')+' / '+f.category;
+const ms=value=>Number.isInteger(value)?value.toLocaleString('zh-CN'):String(Math.round(value*10)/10);
+function updateText(node,text){if(node!==document.activeElement&&!node.dataset.invalidMessage&&node.textContent!==String(text))node.textContent=String(text);}
+function selectOptions(node,values,selected,label=x=>x){
+ const content=values.map(v=>`<option value="${esc(v)}">${esc(label(v))}</option>`).join('');
+ if(node.dataset.options!==content){node.innerHTML=content;node.dataset.options=content;}
+ node.value=selected;
+}
+function currentFrame(result){let index=result.trace.findIndex(t=>t.id===stepId);if(index<0)index=result.trace.length-1;stepId=result.trace[index].id;return {frame:result.trace[index],index};}
+function updateProduct(result){
+ const {frame,index}=currentFrame(result);
+ $$('[data-content]').forEach(node=>updateText(node,spec.content[node.dataset.content]));
+ const months=Array.from(new Set(['all',...spec.data.map(r=>r.date.slice(0,7)),spec.filters.month,frame.filters.month]));
+ const categories=Array.from(new Set(['全部',...spec.data.map(r=>r.category),spec.filters.category,frame.filters.category]));
+ selectOptions($('#filter-month'),months,frame.filters.month,monthLabel);selectOptions($('#filter-category'),categories,frame.filters.category);
+ $('#original-selection').textContent='第一次选择：'+filterLabel(result.initialFilters)+' · '+result.rows.length+' 条。现在停在第 '+(index+1)+' / '+result.trace.length+' 个状态。';
+ const mode=frame.status==='timeout'?'error':frame.status==='success'?'success':'';
+ $('#product-status').className='product-status '+mode;
+ $('#status-icon').textContent=frame.status==='timeout'?'!':frame.status==='success'?'✓':frame.status==='pending'?'↗':'○';
+ const names={before:'操作之前','initial-request':'第一次请求','initial-timeout':'第一次超时','retry-request':'再次请求','retry-success':'收到文件','retry-timeout':'重试仍超时','initial-success':'直接完成'};
+ $('#state-kicker').textContent=(names[frame.id]??frame.id)+' · '+ms(frame.atMs)+' ms';
+ const key=frame.status==='timeout'?'errorMessage':frame.status==='success'?'successMessage':frame.status==='idle'?'subtitle':null;
+ const msg=$('#state-message');
+ if(key){msg.dataset.content=key;msg.setAttribute('contenteditable','plaintext-only');msg.setAttribute('role','textbox');msg.setAttribute('aria-label','当前状态的可编辑文案');msg.classList.add('editable');updateText(msg,spec.content[key]);}
+ else{delete msg.dataset.content;msg.removeAttribute('contenteditable');msg.removeAttribute('role');msg.classList.remove('editable');msg.textContent=frame.message;}
+ $('#state-detail').textContent=frame.status==='success'?'文件含 '+frame.outputRows.length+' 条。对照下方原本选择的记录，检查是否有多出或遗漏。':frame.status==='timeout'?'当前界面显示：'+filterLabel(frame.filters)+'。实际请求参数在下方轨迹中可见。':frame.status==='pending'?'请求使用：'+filterLabel(frame.requestFilters)+'，请求 '+frame.requestRows.length+' 条。':'可以先改文案、规则或数据，也可以点箭头回放一次。';
+ $('#download').disabled=!result.completed;$('#download').title=result.completed?'下载由当前规则实际计算的文件':'两次尝试都超时，没有文件';
+ $('#product-matches').textContent='当前画面匹配 '+frame.rows.length+' / '+spec.data.length+' 条';
+ $('#time-scrub').max=String(result.trace.length-1);$('#time-scrub').value=String(index);$('#time-label').textContent=ms(frame.atMs)+' ms · '+(index+1)+'/'+result.trace.length;
+}
+function cardValues(result){
+ return [
+  {id:'before',name:'01 第一次选择',main:shortFilter(result.initialFilters),detail:'请求 '+result.rows.length+' 条',reason:'filter-row'},
+  {id:result.timedOut?'initial-timeout':'initial-success',name:'02 发生了什么',main:result.timedOut?ms(spec.rules.timeoutMs)+' ms 后超时':ms(result.duration)+' ms 内完成',detail:result.timedOut?'画面变成 '+shortFilter(result.afterTimeoutFilters):'没有触发超时规则',reason:'rule-timeout'},
+  {id:result.timedOut?'retry-request':'initial-success',name:'03 再次请求',main:result.retried?(spec.rules.retrySource==='original'?'使用第一次条件':'使用屏幕上的条件'):'没有进入重试',detail:result.retried?shortFilter(result.retryFilters)+' → '+result.retryRows.length+' 条':'第一次请求已完成',reason:'rule-retry'},
+  {id:result.terminal,name:'04 收到的文件',main:result.completed?result.outputRows.length+' 条记录':'没有文件',detail:result.completed?(result.assertions.find(a=>a.id==='file-matches').actual?'与第一次选择一致':'与第一次选择不同'):'重试仍超过等待预算',reason:'output-section'}
+ ];
+}
+function updateTrace(result){
+ const values=cardValues(result);let prior=null;
+ if(baseline){const old=evaluateExport(baseline);prior=[shortFilter(old.initialFilters)+' · '+old.rows.length+' 条',old.timedOut?ms(baseline.rules.timeoutMs)+' ms 超时，画面 '+shortFilter(old.afterTimeoutFilters):ms(old.duration)+' ms 完成',old.retried?shortFilter(old.retryFilters)+' → '+old.retryRows.length+' 条':'未进入重试',old.completed?old.outputRows.length+' 条文件':'没有文件'];}
+ $('#trace-cards').innerHTML=values.map((c,i)=>`<button class="trace-card ${c.id===stepId?'active':''}" data-step="${c.id}" data-reason="${c.reason}" aria-pressed="${c.id===stepId}"><span class="trace-name">${c.name}</span><span class="trace-main">${esc(c.main)}</span><span class="trace-detail">${esc(c.detail)}</span>${prior?`<span class="trace-baseline">对照：${esc(prior[i])}</span>`:''}</button>`).join('');
+ $('#baseline-label').hidden=!baseline;$('#clear-baseline').hidden=!baseline;$('#baseline').textContent=baseline?'更新保留的对照':'保留这一版作对照';
+}
+function updateRules(result){
+ $$('[data-path]').forEach(input=>{const value=atPath(input.dataset.path);if(input.type==='checkbox')input.checked=value;else if(input!==document.activeElement&&!input.dataset.invalidMessage)input.value=String(value);});
+ $$('[data-retry]').forEach(button=>{button.classList.toggle('selected',button.dataset.retry===spec.rules.retrySource);button.setAttribute('aria-pressed',String(button.dataset.retry===spec.rules.retrySource));});
+ if(!result.timedOut)$('#insight').textContent='这组数据在预算内就完成了。缩短等待预算、增加数据或改变网络倍数，可以看见异常分支。';
+ else if(!result.completed)$('#insight').textContent='重试也超时了，因此没有文件。调整重试的耗时假设或等待预算，观察哪些结果才真正发生。';
+ else if(!result.assertions.find(a=>a.id==='request-matches').actual)$('#insight').textContent='第一次选了 '+result.rows.length+' 条，重试却请求了 '+result.retryRows.length+' 条。点“再次请求”，可以顺着参数找到原因。';
+ else if(!result.assertions.find(a=>a.id==='input-preserved').actual)$('#insight').textContent='文件已经与原选择一致，但界面仍清空了输入。这是两件可以分别决定的事。';
+ else $('#insight').textContent='现在界面、请求和文件保持一致。试着只改一条数据，或换一个等待预算，继续检验这个想法。';
+}
+function updateContexts(){
+ const contexts=evaluateContexts(spec);
+ $('#contexts').innerHTML=contexts.map(c=>`<button class="context" data-context="${c.id}" title="采用这组耗时假设"><strong>${esc(c.label)}</strong><span>首次 ×${c.networkMultiplier} / 重试 ×${c.retryNetworkMultiplier}</span><span>${c.result.timedOut?'首次超时':'首次完成'} · ${ms(c.result.duration)} ms</span><span class="result ${!c.result.completed||c.result.assertions.some(a=>a.status==='failed')?'problem':''}">${c.result.completed?'得到 '+c.result.outputRows.length+' 条':'没有生成文件'}</span></button>`).join('');
+}
+function updateAssertions(result){
+ $('#assertions').innerHTML=result.assertions.map(a=>`<div class="assertion ${a.status}"><b aria-label="${a.status==='passed'?'符合期望':a.status==='failed'?'与期望不同':'未发生'}">${a.status==='passed'?'✓':a.status==='failed'?'!':'○'}</b><div><strong>${esc(a.label)}${!a.expected?'（期望不一致）':''}</strong><small>${esc(a.explanation)}</small></div></div>`).join('');
+}
+let dataSignature='';
+function updateData(result){
+ const selected=new Set(result.rows.map(r=>r.id));
+ const signature=JSON.stringify(spec.data);
+ if(signature!==dataSignature&&!$('#data-body').contains(document.activeElement)&&!$('#data-body [data-invalid-message]')){
+  $('#data-body').innerHTML=spec.data.map(row=>`<tr data-row="${esc(row.id)}"><td><span contenteditable="plaintext-only" data-cell="date" role="textbox" aria-label="记录 ${esc(row.id)} 日期" spellcheck="false">${esc(row.date)}</span></td><td><span contenteditable="plaintext-only" data-cell="category" role="textbox" aria-label="记录 ${esc(row.id)} 分类" spellcheck="false">${esc(row.category)}</span></td><td><span contenteditable="plaintext-only" data-cell="title" role="textbox" aria-label="记录 ${esc(row.id)} 内容" spellcheck="false">${esc(row.title)}</span></td><td><span contenteditable="plaintext-only" data-cell="amount" role="textbox" aria-label="记录 ${esc(row.id)} 金额" spellcheck="false">${esc(row.amount??'')}</span></td><td class="match"></td><td><button class="delete-row" data-delete="${esc(row.id)}" aria-label="删除记录 ${esc(row.id)}">×</button></td></tr>`).join('');dataSignature=signature;
+ }
+ $$('#data-body tr').forEach(row=>{const included=selected.has(row.dataset.row);row.classList.toggle('excluded',!included);row.querySelector('.match').textContent=included?'包含':'不包含';});
+}
+function updateOutput(result){
+ $('#file-explanation').textContent=result.explanations.file;
+ const selected=new Set(result.rows.map(r=>r.id));
+ if(!result.completed){$('#output-preview').innerHTML='<p class="empty-output">没有生成文件。这里不把“候选的数据”当成已经交付的结果。</p>';return;}
+ if(!result.outputRows.length){$('#output-preview').innerHTML='<p class="empty-output">筛选结果为空。当前文件只会包含表头，你仍可以实际下载核对。</p>';return;}
+ $('#output-preview').innerHTML='<table class="file-table"><thead><tr><th>日期</th><th>分类</th><th>文件里的实际内容</th><th>金额</th><th>与初始选择比较</th></tr></thead><tbody>'+result.outputRows.map(row=>`<tr class="${selected.has(row.id)?'':'extra'}"><td>${esc(row.date)}</td><td>${esc(row.category)}</td><td>${esc(row.title)}</td><td>${esc(row.amount??'')}</td><td>${selected.has(row.id)?'原本选中':'多出的一条'}</td></tr>`).join('')+'</tbody></table><p class="output-caption">这些行直接构成下载文件。浅色标出原选择之外的内容；它们没有被隐藏或自动纠正。</p>';
+}
+function render(){
+ const result=evaluateExport(spec);document.body.dataset.completed=String(result.completed);document.body.dataset.outputCount=String(result.outputRows.length);document.body.dataset.inputPreserved=String(result.assertions[0].actual);
+ $('#mobile-result').textContent='首次 '+result.rows.length+' 条 → 请求 '+(result.retried?result.retryRows.length:result.rows.length)+' 条 → '+(result.completed?'文件 '+result.outputRows.length+' 条':'没有文件');
+ updateProduct(result);updateRules(result);updateTrace(result);updateContexts();updateAssertions(result);updateData(result);updateOutput(result);
+ $('#undo').disabled=!undo.length;$('#redo').disabled=!redo.length;$('#storage-state').textContent=storageOkay?'本浏览器保存 · 无需登录':'暂未保存 · 可导出 JSON 留存';
+}
+function readEditor(node){
+ if(node.dataset.content)return change({content:{[node.dataset.content]:node.textContent.replace(/\r?\n/g,' ')}},{group:'content.'+node.dataset.content,element:node});
+ if(node.dataset.cell){const id=node.closest('[data-row]').dataset.row;const field=node.dataset.cell;const text=node.textContent.trim();const rows=spec.data.map(r=>{if(r.id!==id)return r;const next={...r};if(field==='amount'){if(!text)delete next.amount;else next.amount=Number(text);}else next[field]=text;return next;});return change({data:rows},{group:'data.'+id+'.'+field,element:node});}
+}
+document.addEventListener('focusin',event=>{if(event.target.matches('[data-content],[data-cell],input[type="number"]'))stopPlaying();});
+document.addEventListener('compositionstart',event=>composing.add(event.target));
+document.addEventListener('compositionend',event=>{composing.delete(event.target);if(event.target.matches('[data-content],[data-cell]'))readEditor(event.target);});
+document.addEventListener('input',event=>{
+ const node=event.target;if(composing.has(node)||event.isComposing)return;
+ if(node.matches('[data-content],[data-cell]'))readEditor(node);
+ if(node.matches('input[type="number"][data-path]')){if(!Number.isFinite(node.valueAsNumber))return;change(patchPath(node.dataset.path,node.valueAsNumber),{group:node.dataset.path,element:node});}
 });
-const dialog=document.querySelector('#share-dialog');let lastFocus;
-function openShare(){lastFocus=document.activeElement;if(typeof dialog.showModal==='function')dialog.showModal();else dialog.setAttribute('open','');}
-function closeShare(){if(typeof dialog.close==='function')dialog.close();else dialog.removeAttribute('open');lastFocus?.focus();}
-document.querySelector('#share-open').addEventListener('click',openShare);document.querySelector('#share-close').addEventListener('click',closeShare);dialog.addEventListener('click',event=>{if(event.target===dialog){const r=dialog.getBoundingClientRect();if(event.clientX<r.left||event.clientX>r.right||event.clientY<r.top||event.clientY>r.bottom)closeShare();}});
-document.querySelector('#copy-share').addEventListener('click',async()=>{try{await navigator.clipboard.writeText(PUBLIC_URL);toast('体验链接已复制。');}catch{document.querySelector('#share-url').select();toast('请长按或手动复制上面的体验链接。');}});
+document.addEventListener('focusout',event=>{
+ const node=event.target;if(node.dataset?.invalidMessage)problem('这一处尚未生效：'+node.dataset.invalidMessage);
+ if(node.matches?.('[data-content],[data-cell],input[type="number"]')){lastGroup='';requestAnimationFrame(()=>render());}
+});
+document.addEventListener('change',event=>{
+ const node=event.target;if(node.matches('input[type="checkbox"][data-path]'))change(patchPath(node.dataset.path,node.checked));
+ if(node.id==='filter-month'||node.id==='filter-category'){const filters={month:$('#filter-month').value,category:$('#filter-category').value};stepId='before';change({filters});}
+});
+document.addEventListener('click',event=>{
+ const button=event.target.closest('button');if(!button||button.disabled)return;
+ if(button.dataset.retry)change({rules:{retrySource:button.dataset.retry}});
+ if(button.dataset.step){stepId=button.dataset.step;render();if(innerWidth<761)$('#product-status').scrollIntoView({block:'center',behavior:'smooth'});}
+ if(button.dataset.context){const context=evaluateContexts(spec).find(c=>c.id===button.dataset.context);change({networkMultiplier:context.networkMultiplier,retryNetworkMultiplier:context.retryNetworkMultiplier});}
+ if(button.dataset.delete){clearPendingEditors();change({data:spec.data.filter(r=>r.id!==button.dataset.delete)});}
+});
+function clearPendingEditors(){const active=document.activeElement;if($('#data-body').contains(active))active.blur();$$('[data-invalid-message]').forEach(n=>{delete n.dataset.invalidMessage;n.removeAttribute('aria-invalid');if(n.dataset.content)n.textContent=spec.content[n.dataset.content];else if(n.dataset.cell){const row=spec.data.find(r=>r.id===n.closest('[data-row]').dataset.row);if(row)n.textContent=String(row[n.dataset.cell]??'');}else if(n.dataset.path)n.value=String(atPath(n.dataset.path));});dataSignature='';}
+function syncActiveAfterHistory(){const n=document.activeElement;if(n.dataset?.content)n.textContent=spec.content[n.dataset.content];else if(n.dataset?.path&&n.type==='number')n.value=String(atPath(n.dataset.path));else if(n.dataset?.cell){const r=spec.data.find(r=>r.id===n.closest('[data-row]').dataset.row);if(r)n.textContent=String(r[n.dataset.cell]??'');}if(n.matches?.('[contenteditable]')){const range=document.createRange();range.selectNodeContents(n);range.collapse(false);const selection=getSelection();selection.removeAllRanges();selection.addRange(range);}}
+$('#undo').addEventListener('click',()=>{if(!undo.length)return;clearPendingEditors();redo.push(spec);spec=undo.pop();lastGroup='';syncActiveAfterHistory();persist();dataSignature='';render();});
+$('#redo').addEventListener('click',()=>{if(!redo.length)return;clearPendingEditors();undo.push(spec);spec=redo.pop();lastGroup='';syncActiveAfterHistory();persist();dataSignature='';render();});
+$('#baseline').addEventListener('click',()=>{baseline=validateDocument(spec);persist();render();toast('已保留当前作品。继续修改时，这个对照保持不变。');});
+$('#clear-baseline').addEventListener('click',()=>{baseline=null;persist();render();});
+$('#reset').addEventListener('click',()=>{stepId='before';$$('[data-invalid-message]').forEach(n=>{delete n.dataset.invalidMessage;n.removeAttribute('aria-invalid');});clearPendingEditors();if(commit(createDocument())){syncActiveAfterHistory();dataSignature='';render();toast('已回到最初的作品。撤销可以找回刚才的想法。');}});
+function stopPlaying(){clearInterval(playing);playing=null;$('#play').textContent='▶';}
+function play(){stopPlaying();const result=evaluateExport(spec);stepId=result.trace[0].id;render();$('#play').textContent='Ⅱ';playing=setInterval(()=>{const result=evaluateExport(spec);const index=result.trace.findIndex(t=>t.id===stepId);if(index>=result.trace.length-1){stopPlaying();return;}stepId=result.trace[index+1].id;render();},650);}
+$('#show-process').addEventListener('click',()=>$('.process-section').scrollIntoView({block:'start',behavior:'smooth'}));
+$('#play').addEventListener('click',()=>playing?stopPlaying():play());$('#run').addEventListener('click',play);
+$('#time-scrub').addEventListener('input',event=>{stopPlaying();const trace=evaluateExport(spec).trace;stepId=trace[Number(event.target.value)].id;render();});
+function download(name,text,type){const url=URL.createObjectURL(new Blob([text],{type}));const a=document.createElement('a');a.href=url;a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);}
+$('#download').addEventListener('click',()=>{const result=evaluateExport(spec);if(!result.completed)return;const title=spec.content.title.replace(/[\\/:*?"<>|]/g,'_').trim().slice(0,60)||'TeamLink导出';download(title+'.csv',toCsv(result.outputRows,{bom:true}),'text/csv;charset=utf-8');toast('下载的就是下面这些行，由当前规则与数据算出。');});
+$('#add-row').addEventListener('click',()=>{if(spec.data.length>=LIMITS.rows){problem('这张作品最多支持 '+LIMITS.rows+' 条记录。');return;}clearPendingEditors();let n=spec.data.length+1;while(spec.data.some(r=>r.id==='row-'+n))n++;change({data:[...spec.data,{id:'row-'+n,date:'2026-10-31',category:'产品',title:'直接修改这条新记录',amount:0}]});});
+async function copy(text){try{await navigator.clipboard.writeText(text);return true;}catch{return false;}}
+$('#copy-spec').addEventListener('click',async()=>{
+ const r=evaluateExport(spec);const text=['# '+spec.content.title,'',spec.content.subtitle,'','## 当前规则',`- 超时预算：${spec.rules.timeoutMs} ms`,`- 超时后${spec.rules.preserveFilters?'保留':'清空'}筛选`,`- 重试读取${spec.rules.retrySource==='original'?'第一次':'界面当前'}的条件`,`- 基础耗时 ${spec.rules.baseLatencyMs} ms + 每条 ${spec.rules.perRowLatencyMs} ms；首次倍数 ${spec.networkMultiplier}，重试倍数 ${spec.retryNetworkMultiplier}`,'','## 按当前模型复现',r.explanations.initial,r.explanations.input,r.explanations.retry,r.explanations.file,'','## 仍需在真实产品中验证','这里是可执行计算模型，未调用真实导出服务。实际实现、性能与验收须另行核对。'].join('\n');
+ if(await copy(text))toast('这版的具体规则与案例已复制，可带回 Codex 或团队文档。');else{download('TeamLink-规则与案例.md',text,'text/markdown;charset=utf-8');toast('剪贴板不可用，已下载规则与案例。');}
+});
+$('#export-document').addEventListener('click',()=>download('TeamLink-可继续编辑的作品.json',serializeDocument(spec),'application/json'));
+$('#import-document').addEventListener('click',()=>$('#import-file').click());
+$('#import-file').addEventListener('change',async event=>{const file=event.target.files?.[0];if(!file)return;try{if(file.size>LIMITS.documentBytes)throw Error('文件过大。');const next=parseDocument(await file.text());clearPendingEditors();if(commit(next)){stepId='before';dataSignature='';render();toast('作品已导入，可以直接继续改。');}}catch(error){problem(error.message);}event.target.value='';});
+const dialog=$('#share-dialog');let shareFocus;
+$('#share').addEventListener('click',()=>{try{$('#share-url').value=ENTRY+encodeFragment(spec);shareFocus=document.activeElement;dialog.showModal();}catch(error){problem(error.message);}});
+$('#close-share').addEventListener('click',()=>{dialog.close();shareFocus?.focus();});
+$('#copy-link').addEventListener('click',async()=>{if(await copy($('#share-url').value))toast('已复制。链接打开的是这一版可继续编辑的作品。');else{$('#share-url').select();toast('请手动复制上面的作品链接。');}});
+document.addEventListener('keydown',event=>{
+ if(event.isComposing)return;
+ if(event.key==='Enter'&&event.target.matches('[data-content],[data-cell]')){event.preventDefault();event.target.blur();return;}
+ if((event.ctrlKey||event.metaKey)&&event.key.toLowerCase()==='z'&&!dialog.open){event.preventDefault();(event.shiftKey?$('#redo'):$('#undo')).click();}
+});
+function clearHighlight(){$$('.highlight').forEach(n=>n.classList.remove('highlight'));}
+$('#trace-cards').addEventListener('pointerover',event=>{const card=event.target.closest('[data-reason]');if(!card)return;clearHighlight();const target=card.dataset.reason==='filter-row'?$('.filter-row'):card.dataset.reason==='output-section'?$('.output-section'):$('#'+card.dataset.reason);target?.classList.add('highlight');});
+$('#trace-cards').addEventListener('pointerleave',clearHighlight);
+$('#timeout').addEventListener('pointerdown',event=>{if(event.button!==0)return;drag={x:event.clientX,value:spec.rules.timeoutMs,moved:false,pointer:event.pointerId};event.target.setPointerCapture(event.pointerId);lastGroup='';});
+$('#timeout').addEventListener('pointermove',event=>{if(!drag||drag.pointer!==event.pointerId)return;const delta=event.clientX-drag.x;if(Math.abs(delta)<5&&!drag.moved)return;drag.moved=true;const next=Math.max(0,Math.min(LIMITS.timeoutMs,Math.round((drag.value+delta*10)/10)*10));event.target.value=String(next);change({rules:{timeoutMs:next}},{group:'scrub-timeout',element:event.target});});
+$('#timeout').addEventListener('pointerup',()=>{drag=null;lastGroup='';});$('#timeout').addEventListener('pointercancel',()=>{drag=null;lastGroup='';});
+window.addEventListener('hashchange',()=>{if(!location.hash.startsWith('#doc='))return;try{const next=decodeFragment(location.hash);fromShared=true;stepId='before';commit(next);}catch(error){problem(error.message);}});
 render();
