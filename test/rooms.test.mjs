@@ -5,6 +5,7 @@ import {readFileSync, readdirSync} from 'node:fs';
 import {createHash} from 'node:crypto';
 import {handleRooms, ROOM_LIMITS} from '../worker/rooms.mjs';
 import {createScene, updateScene, moveSceneObject, duplicateSceneObject, removeSceneObject, leafPath} from '../web/scene-model.mjs';
+import {defaultScenePatch} from '../web/direct-edit.mjs';
 
 // Use real SQLite to execute production SQL; only the asynchronous D1 call shape is adapted.
 class SqliteD1 {
@@ -132,6 +133,49 @@ test('undo uses the bounded server snapshot stack and never rewinds unrelated me
       assert.equal(JSON.parse(env.DB.row(room.id).history_json).length, 0);
       const response = await post(env, room, {nonce: 'undo-empty', expectedRevision: revision}, undefined, '/undo');
       state = await response.json(); assert.equal(state.scene.trees, 3); assert.deepEqual(state.messages.at(-1).changes, []);
+    } finally { env.DB.close(); }
+  });
+});
+
+test('restoring defaults confirms the same room, resets every field atomically, and remains undoable without a model call', async () => {
+  await clock(async advance => {
+    const env = environment(); let providerCalls = 0;
+    const options = {interpret: async () => { providerCalls++; throw Error('Direct resets must not call a provider'); }};
+    try {
+      const room = await created(env);
+      const leafTrail = [{x: 0.1, y: 0.2}, {x: 0.8, y: 0.4}, {x: 0.4, y: 0.9}];
+      const changed = updateScene(createScene(), {seed: 188, hour: 4.5, trees: 8, rain: 0.8, wind: 0.9,
+        branchAngle: 70, branchDepth: 7, boats: 0, mountains: 4, birds: 12, flowers: 4,
+        placements: [{id: 'tree:0', x: 0.18, y: 0.72}, {id: 'mountain:3', x: 0.84, y: 0.62}],
+        leafTrail, leafOrigin: leafTrail[0], leafTarget: leafTrail.at(-1)});
+      const {schemaVersion, ...editedPatch} = changed;
+      let response = await post(env, room, {nonce: 'before-default-reset', expectedRevision: 0, patch: editedPatch}, options);
+      let state = await response.json(); assert.equal(response.status, 200); assert.deepEqual(state.scene, changed);
+      const previousMessage = state.messages[0]; advance();
+
+      const operation = {nonce: 'restore-whole-landscape', expectedRevision: state.revision, patch: defaultScenePatch()};
+      response = await post(env, room, operation, options); state = await response.json();
+      assert.equal(response.status, 200); assert.equal(state.id, room.id); assert.deepEqual(state.scene, createScene());
+      assert.equal(state.receipt.kind, 'patch'); assert.equal(state.canUndo, true);
+      assert.deepEqual(state.messages[0], previousMessage, 'reset retains the room conversation');
+      assert.ok(state.messages.at(-1).changes.some(change => change.key === 'placements'));
+      assert.ok(state.messages.at(-1).changes.some(change => change.key === 'leafTrail'));
+      response = await post(env, room, operation, options);
+      const replayed = await response.json(); assert.equal(response.status, 200); assert.equal(replayed.revision, state.revision);
+
+      advance();
+      response = await post(env, room, {nonce: 'confirm-already-default', expectedRevision: state.revision, patch: defaultScenePatch()}, options);
+      state = await response.json(); assert.equal(response.status, 200); assert.deepEqual(state.scene, createScene());
+      assert.deepEqual(state.messages.at(-1).changes, []);
+      assert.equal(JSON.parse(env.DB.row(room.id).history_json).length, 2, 'confirmation does not add an empty undo step');
+
+      advance();
+      response = await post(env, room, {nonce: 'undo-default-reset', expectedRevision: state.revision}, options, '/undo');
+      state = await response.json(); assert.equal(response.status, 200); assert.deepEqual(state.scene, changed);
+      advance();
+      response = await post(env, room, {nonce: 'stale-default-reset', expectedRevision: operation.expectedRevision, patch: defaultScenePatch()}, options);
+      const conflict = await response.json(); assert.equal(response.status, 409); assert.deepEqual(conflict.current.scene, changed);
+      assert.deepEqual(JSON.parse(env.DB.row(room.id).scene_json), changed); assert.equal(providerCalls, 0);
     } finally { env.DB.close(); }
   });
 });

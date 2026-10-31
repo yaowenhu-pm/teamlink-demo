@@ -2,7 +2,7 @@ import qrcode from 'qrcode-generator';
 import {createScene,validateScene,updateScene,sceneChanges,moveSceneObject} from './scene-model.mjs';
 import {mountLandscape} from './scene-renderer.mjs';
 import {mountCodePanel} from './code-panel.mjs';
-import {mountDirectEditor,SHORTCUTS} from './direct-edit.mjs';
+import {mountDirectEditor,defaultScenePatch,SHORTCUTS} from './direct-edit.mjs';
 import {mountLandscapeMusic} from './music.mjs';
 const $=selector=>document.querySelector(selector),$$=selector=>[...document.querySelectorAll(selector)];
 const esc=value=>String(value??'').replace(/[&<>"']/g,char=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));
@@ -36,7 +36,7 @@ function renderControls(){
  $('#play-leaf').textContent=playing&&motionPlaying?'Ⅱ':'▶';
  document.body.classList.toggle('night-scene',scene.hour<6||scene.hour>=19.5);document.body.dataset.hour=String(scene.hour);document.body.dataset.trees=String(scene.trees);document.body.dataset.boats=String(scene.boats);document.body.dataset.mountains=String(scene.mountains);document.body.dataset.revision=String(room?.revision??0);
  codePanel?.update(scene,{before:codeBefore??scene,selected,busy:busy||connecting||drawingTrajectory});
- directEditor?.update(scene,{busy:busy||connecting||codeDraft,drawing:drawingTrajectory,motionPlaying});
+ directEditor?.update(scene,{busy:busy||connecting||codeDraft,resetBusy:busy||connecting,drawing:drawingTrajectory,motionPlaying});
  $('#draw-route-hint').hidden=!drawingTrajectory;$('#live-stage').classList.toggle('drawing-trajectory',drawingTrajectory);
  $('#reset-leaf-route').disabled=busy||connecting||codeDraft||!scene.leafTrail?.length;
 }
@@ -92,7 +92,7 @@ directEditor=mountDirectEditor($('#live-stage'),{
  getScene:()=>scene,getObjects:()=>renderer.getObjectPositions(),onCommit:patch=>finishDirect(patch),
  onSelection(id,kind){if(kind==='tree'){inspector('tree');return;}selected=null;leafCompare=null;$('#inspector').hidden=true;render();quietOpening();},
  onInspect(kind){if(kind==='leaf')directEditor?.select(null);inspector(kind);},onUndo:()=>$('#undo-world').click(),notify:toast
- ,onDraw:()=>setDrawing(!drawingTrajectory),onToggleMotion(){motionPlaying=!motionPlaying;render();},onHelp:showShortcuts,onNudge:delta=>renderer.nudgeSelected(delta)
+ ,onDraw:()=>setDrawing(!drawingTrajectory),onReset:resetLandscape,onToggleMotion(){motionPlaying=!motionPlaying;render();},onHelp:showShortcuts,onNudge:delta=>renderer.nudgeSelected(delta)
 });
 function animate(now){const delta=Math.min((now-lastFrame)/1000,.1);lastFrame=now;if(motionPlaying&&stageVisible&&!document.hidden){motionTime+=delta;if(playing)phase=(phase+delta/7)%1;renderScene();if(selected==='leaf'&&$('#leaf-time')!==document.activeElement)$('#leaf-time').value=String(phase);}requestAnimationFrame(animate);}
 function setConnection(text,connected=false){$('#connection').textContent=text;$('#connection').classList.toggle('connected',connected);}
@@ -147,9 +147,9 @@ async function pollRoom(){
  }catch(error){pollDelay=Math.min(pollDelay*1.7,8000);setConnection(error.status===410?'风景链接已到期':'连接暂时中断');if([401,403,404,410].includes(error.status)){shareUnavailable=true;renderInvite(error.message);clearTimeout(pollTimer);polling=false;status('这个房间暂时不可用，可以重新连接一片新的风景。');return;}}
  polling=false;schedulePoll();
 }
-async function sendOperation(payload,undo=false,retryRequest=null){
+async function sendOperation(payload,undo=false,retryRequest=null,onApplied=null){
  if(busy)return;busy=true;quietOpening();$('#retry').hidden=true;renderControls();
- const operation=retryRequest&&!retryRequest.retryAsNew?retryRequest:{payload,undo,nonce:crypto.randomUUID()};
+ const operation=retryRequest&&!retryRequest.retryAsNew?retryRequest:{payload,undo,nonce:crypto.randomUUID(),onApplied:retryRequest?.onApplied??onApplied};
  operation.inFlight=true;operation.retryAsNew=false;lastRequest=operation;const {nonce}=operation;
  try{await ensureRoom();operation.expectedRevision??=room.revision;const wait=Math.max(0,writeNotBefore-Date.now());if(wait)await new Promise(resolve=>setTimeout(resolve,wait));writeNotBefore=Date.now()+1050;
  let result;
@@ -164,13 +164,32 @@ async function sendOperation(payload,undo=false,retryRequest=null){
  operation.retryAsNew=error.status===409&&!recorded;
  $('#retry').hidden=busy||!!(recorded&&recorded.kind!=='pending')||!!(error.status&&error.status<500&&![409,429].includes(error.status));
  }finally{writeNotBefore=Math.max(writeNotBefore,Date.now()+1050);operation.inFlight=false;renderControls();schedulePoll();}
+ const receipt=receiptFor(nonce);
+ if(receipt?.kind===(undo?'undo':Object.hasOwn(operation.payload,'patch')?'patch':'instruction')){operation.onApplied?.();return true;}
+ return false;
 }
 async function sendText(text){if(!text.trim()||busy||codeDraft||connecting||drawingTrajectory)return;$('#instruction').value='';await sendOperation({text:text.trim()});}
-function finishDirect(patch){
- const before=editBefore??scene;editBefore=null;codeDraft=false;const next=updateScene(before,patch);const changes=sceneChanges(before,next);scene=next;if(!changes.length){render();return;}
+function finishDirect(patch,{onApplied=null,confirmRoom=false}={}){
+ const before=editBefore??scene;editBefore=null;codeDraft=false;const next=updateScene(before,patch);const changes=sceneChanges(before,next);scene=next;if(!changes.length&&!(room&&confirmRoom)){render();onApplied?.();return true;}
  codeBefore=before;
- if(room){status('正在同步这次直接修改…');render();return sendOperation({patch});}
- else{localHistory.push(before);if(localHistory.length>15)localHistory.shift();saveLocal();showChanges(changes);lastReply='直接修改，结果已经在画面上。';status('当前为本机预览，重新连接后可以共享。');codePanel?.update(scene,{before,selected,resetDraft:true});render();}
+ if(room){status('正在同步这次直接修改…');render();return sendOperation({patch},false,null,onApplied);}
+ else{localHistory.push(before);if(localHistory.length>15)localHistory.shift();saveLocal();showChanges(changes);lastReply='直接修改，结果已经在画面上。';status('当前为本机预览，重新连接后可以共享。');codePanel?.update(scene,{before,selected,resetDraft:true});render();onApplied?.();return true;}
+}
+function resetLandscape(){
+ if(busy||connecting)return;
+ // Discard uncommitted JSON, slider/drag and hand-drawn previews before choosing
+ // the same committed baseline used by the room's CAS and undo snapshot.
+ renderer.cancelPathDraw();if(drawingTrajectory){drawingTrajectory=false;restoreDrawing();}
+ scene=validateScene(room?.scene??editBefore??scene);editBefore=null;codeDraft=false;drawingSnapshot=null;
+ codeBefore=scene;codePanel?.update(scene,{before:scene,selected,resetDraft:true});
+ const patch=defaultScenePatch();
+ return finishDirect(patch,{confirmRoom:true,onApplied(){
+  selected=null;leafCompare=null;phase=0;motionTime=0;playing=!reduced;motionPlaying=!reduced;lastFrame=performance.now();
+  $('#leaf-time').value='0';$('#inspector').hidden=true;directEditor?.reset();$('#instruction').value='';
+  codePanel?.update(scene,{before:codeBefore??scene,selected,resetDraft:true});render();
+  if(sceneChanges(scene,createScene()).length)status('默认风景已恢复，房间随后又有新的修改。');
+  else status(room?'已恢复本房间默认风景 · 可撤销':'已恢复默认风景 · 当前为本机预览');
+ }});
 }
 for(const [id,key] of [['hour-range','hour'],['angle-range','branchAngle'],['depth-range','branchDepth'],['wind-range','wind']]){
  const input=$('#'+id);input.addEventListener('input',()=>{if(busy||connecting)return;if(!editBefore)editBefore=scene;scene=updateScene(scene,{[key]:Number(input.value)});render();quietOpening();});input.addEventListener('change',()=>{if(busy||connecting)return;finishDirect({[key]:Number(input.value)});});

@@ -5,6 +5,7 @@ const NS = 'http://www.w3.org/2000/svg';
 const WIDTH = 1600, HEIGHT = 1000, SKY_HEIGHT = 480;
 const FOREGROUND_SCALE = .45, FOREGROUND_Y = 525;
 const FALLING_LEAF_SIZE = 36, FALLING_LEAF_SCALE = FOREGROUND_SCALE;
+const LEAF_GOLD = '#e9bf59', LEAF_GOLD_LIGHT = '#f3d47b';
 const TAU = Math.PI * 2;
 let nextMount = 0;
 const clamp = (value, low = 0, high = 1) => Math.min(high, Math.max(low, value));
@@ -160,10 +161,10 @@ function pine(x, y, height) {
   const w = height * .25, p = (dx, dy) => `${fixed(x+dx*w)} ${fixed(y+dy*height)}`;
   return `M${p(0,-1)}Q${p(-.12,-.83)} ${p(-.39,-.73)}L${p(-.15,-.75)}Q${p(-.35,-.58)} ${p(-.63,-.49)}L${p(-.32,-.53)}Q${p(-.53,-.35)} ${p(-.88,-.26)}L${p(-.51,-.31)}Q${p(-.72,-.15)} ${p(-1,-.07)}Q${p(-.43,-.01)} ${p(-.04,-.06)}L${p(-.035,.045)}H${fixed(x+w*.035)}L${p(.045,-.055)}Q${p(.48,-.01)} ${p(.98,-.08)}Q${p(.64,-.18)} ${p(.47,-.32)}L${p(.83,-.27)}Q${p(.44,-.43)} ${p(.29,-.55)}L${p(.59,-.51)}Q${p(.30,-.66)} ${p(.13,-.77)}L${p(.35,-.74)}Q${p(.10,-.88)} ${p(0,-1)}Z`;
 }
-function singleLeafArtwork(r, fill = 'var(--leaf)') {
+function singleLeafArtwork(r, fill = LEAF_GOLD) {
   const blade = `M0 0C${fixed(-r*.92)} ${fixed(-r*.16)} ${fixed(-r*.9)} ${fixed(-r*1.08)} 0 ${fixed(-r*1.5)}C${fixed(r*.9)} ${fixed(-r*1.08)} ${fixed(r*.92)} ${fixed(-r*.16)} 0 0Z`;
   const vein = `M0 0V${fixed(-r*1.38)}M0 ${fixed(-r*.4)}L${fixed(-r*.37)} ${fixed(-r*.68)}M0 ${fixed(-r*.68)}L${fixed(r*.37)} ${fixed(-r*.96)}`;
-  return `<path d="${blade}" fill="${fill}"/><path d="${vein}" fill="none" stroke="var(--branch)" stroke-width="1.1" stroke-opacity=".35" stroke-linecap="round"/>`;
+  return `<path d="${blade}" fill="${fill}"/><path d="${vein}" fill="none" stroke="#936b2d" stroke-width="1.1" stroke-opacity=".4" stroke-linecap="round"/>`;
 }
 const pointsPath = (points) => points.map((p, i) => `${i ? 'L' : 'M'}${fixed(p.x * WIDTH)} ${fixed(p.y * HEIGHT)}`).join(' ');
 function phasePoint(points, phase) {
@@ -427,7 +428,7 @@ export function mountLandscape(svgElement, { onSunDrag, onTreeSelect, onLeafSele
       if(tip.level<Math.max(0,scene.branchDepth-2))continue;
       const x = tx+tip.x*scale, y = ty+tip.y*scale;
       const r = Math.max(24, tip.size*(tip.level===scene.branchDepth-1 ? 1.7 : 1.3));
-      const fill=tip.level%3 ? 'var(--leaf)' : 'var(--leaf-light)';
+      const fill=tip.level%3 ? LEAF_GOLD : LEAF_GOLD_LIGHT;
       groups.push(`<g transform="translate(${fixed(x)} ${fixed(y)}) rotate(${fixed(tip.rotation)})" opacity=".94"><g transform="rotate(-62) scale(.85)">${singleLeafArtwork(r,fill)}</g><g transform="rotate(62) scale(.85)">${singleLeafArtwork(r,fill)}</g>${singleLeafArtwork(r,fill)}</g>`);
     }
     layers.hero.innerHTML = groups.join('');
@@ -466,7 +467,9 @@ export function mountLandscape(svgElement, { onSunDrag, onTreeSelect, onLeafSele
     svgElement.setAttribute('data-drawing-trajectory',String(drawingMode));
     if(!drawingMode&&pathStroke)finishPathDraw(null,true);
     const requestedTime=Number.isFinite(motionTime)?Math.max(0,motionTime):0;
-    if(motionPlaying||lastMotionTime===null)motionNow=requestedTime;
+    const rewindMotion=lastMotionTime!==null&&requestedTime<lastMotionTime;
+    if(rewindMotion)objectClocks.clear();
+    if(motionPlaying||lastMotionTime===null||rewindMotion)motionNow=requestedTime;
     motionDelta=Math.max(0,motionNow-(lastMotionTime??motionNow));lastMotionTime=motionNow;
     phase = Number.isFinite(phase) ? clamp(phase) : 0;currentPhase=phase;
     const nextGeometry = [current.seed,current.trees,current.flowers,current.branchAngle,current.branchDepth,current.boats,current.mountains,current.birds,fixed(visibleLeft),fixed(visibleRight),fixed(visibleTop),fixed(visibleBottom)].join(':');

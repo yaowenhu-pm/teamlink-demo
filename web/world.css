@@ -45,7 +45,7 @@
 
 
 /* Direct editing stays inside the canvas, including its fullscreen top layer. */
-.canvas-tools{position:absolute;top:16px;left:16px;z-index:14;display:flex;gap:5px;align-items:center;padding:5px;border-radius:12px;background:#f5faf2db;box-shadow:0 4px 24px #173b4c14;backdrop-filter:blur(16px);color:#315668;font-size:11px}
+.canvas-tools{position:absolute;top:16px;left:16px;z-index:14;display:flex;gap:5px;align-items:center;max-width:calc(100% - 32px);padding:5px;border-radius:12px;background:#f5faf2db;box-shadow:0 4px 24px #173b4c14;backdrop-filter:blur(16px);color:#315668;font-size:11px}
 .canvas-tools button,.object-tools button{font:inherit;color:inherit;border:0;border-radius:7px;padding:8px 11px;background:transparent;cursor:pointer;white-space:nowrap;min-height:34px}
 .canvas-tools button:hover,.object-tools button:hover{background:#bed4da60}.canvas-tools button:disabled,.object-tools button:disabled{opacity:.35;cursor:default}
 .canvas-tools button:focus-visible,.object-tools button:focus-visible{outline:2px solid #2585ce;outline-offset:2px}
@@ -70,6 +70,7 @@ body.focus-mode #live-stage.presentation-ui-visible .presentation-tools,body.foc
 .presentation-tools button{border:1px solid #ffffff55;border-radius:999px;padding:10px 17px;background:#244c5b55;backdrop-filter:blur(14px);color:inherit;font:inherit;cursor:pointer}
 .presentation-tools button:focus-visible{outline:2px solid white;outline-offset:4px}
 @media(max-width:600px){body.focus-mode #live-stage .presentation-tools{top:16px;right:16px;gap:9px}.presentation-tools>span{display:none}}
+@media(max-width:900px){body.focus-mode #live-stage .canvas-tools{top:max(70px,calc(env(safe-area-inset-top) + 54px))}}
 
 /* The introduction is a visible part of the first screen. */
 .hero.hero-inline-film{max-width:1240px;margin:0 auto;display:grid;grid-template-columns:.9fr 1.35fr;align-items:center;gap:66px;padding:54px 0 48px;text-align:left}.hero-inline-film .hero-copy{padding-bottom:14px}.hero-inline-film .hero-eyebrow{justify-content:flex-start;font-size:10px;margin-bottom:23px}.hero-inline-film h1{font-size:70px;line-height:1.14;letter-spacing:-2.6px;margin-bottom:25px}.hero-inline-film h1 span{display:block}.hero-inline-film .hero-description{font-size:14px;line-height:1.95;max-width:395px;letter-spacing:0}.hero-inline-film .mobile-break{display:block}.hero-inline-film .hero-actions{justify-content:flex-start;gap:24px;margin:28px 0 18px}.hero-inline-film .hero-footnote{font-size:9px}.hero-film{margin:0;min-width:0;align-self:center}.hero-film-heading{display:flex;align-items:center;justify-content:space-between;gap:20px;color:#627992;font-size:11px;padding:0 3px 13px}.hero-film-heading>span:last-child{font-size:9px;color:#a2adba}#intro-video{display:block;width:100%;aspect-ratio:16/9;background:#f2f6fc;border:1px solid #dce5f1;border-radius:19px;box-shadow:0 16px 45px -28px #234b7c42;object-fit:contain}#intro-video-status{font-size:9px;color:#94a3b5;line-height:1.8;margin-top:11px;text-align:center;min-height:17px}

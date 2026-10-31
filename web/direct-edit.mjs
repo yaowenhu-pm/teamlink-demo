@@ -1,6 +1,11 @@
-import {SCENE_LIMITS, updateScene, duplicateSceneObject, removeSceneObject} from './scene-model.mjs';
+import {SCENE_LIMITS, createScene, updateScene, duplicateSceneObject, removeSceneObject} from './scene-model.mjs';
 import {canvasShortcut,SHORTCUTS} from './shortcut-model.mjs';
 export {SHORTCUTS};
+
+/** All editable defaults, including paths and placements, travel as one room patch. */
+export function defaultScenePatch() {
+ const {schemaVersion,...patch}=createScene();return patch;
+}
 
 const TYPES = Object.freeze({tree:{key:'trees',label:'树'},mountain:{key:'mountains',label:'山'},boat:{key:'boats',label:'船'},bird:{key:'birds',label:'鸟'}});
 const bound = value => Math.round(Math.max(.02,Math.min(.98,value))*1e6)/1e6;
@@ -9,17 +14,18 @@ function button(text, label, action) {
 }
 
 /** Canvas actions share the same validated scene and commit path as text and JSON. */
-export function mountDirectEditor(stage,{getScene,getObjects,onCommit,onSelection,onInspect,onUndo,onDraw,onToggleMotion,onHelp,onNudge,notify=()=>{}}) {
- let selectedId=null,clipboard=null,busy=false,drawing=false,motionPlaying=true,canvasActive=false;
+export function mountDirectEditor(stage,{getScene,getObjects,onCommit,onSelection,onInspect,onUndo,onDraw,onReset,onToggleMotion,onHelp,onNudge,notify=()=>{}}) {
+ let selectedId=null,clipboard=null,busy=false,resetBusy=null,drawing=false,motionPlaying=true,canvasActive=false;
  const addedTabIndex=!stage.hasAttribute('tabindex');if(addedTabIndex)stage.tabIndex=-1;
  const tools=document.createElement('div');tools.className='canvas-tools';tools.setAttribute('role','toolbar');tools.setAttribute('aria-label','画面内编辑工具');
  const menu=document.createElement('div');menu.className='canvas-add-menu';menu.hidden=true;
  const add=button('＋ 添加','添加风景对象',()=>{menu.hidden=!menu.hidden;add.setAttribute('aria-expanded',String(!menu.hidden));});add.setAttribute('aria-expanded','false');
  const trajectory=button('落叶轨迹','在画面中调整落叶轨迹',()=>onInspect('leaf'));
  const draw=button('画落叶路线','直接手绘落叶飞行路线',()=>onDraw());draw.setAttribute('aria-pressed','false');
+ const reset=button('恢复默认','恢复本房间默认风景，可撤销',()=>onReset?.());reset.id='reset-world';reset.title='恢复本房间默认风景，可撤销';
  const motion=button('Ⅱ','暂停风景动画',()=>onToggleMotion());motion.className='motion-toggle';
  const help=button('?','查看画布快捷键（?）',()=>onHelp?.());help.className='shortcut-help';
- tools.append(draw,trajectory,add,motion,help,menu);stage.append(tools);
+ tools.append(draw,trajectory,add,reset,motion,help,menu);stage.append(tools);
  const dock=document.createElement('div');dock.className='object-tools';dock.hidden=true;dock.setAttribute('role','toolbar');dock.setAttribute('aria-label','选中对象操作');
  const label=document.createElement('span');label.className='object-tools-label';
  const copy=button('复制','复制选中对象（⌘/Ctrl+C）',copyObject),paste=button('粘贴','粘贴风景对象（⌘/Ctrl+V）',pasteObject);
@@ -77,6 +83,7 @@ export function mountDirectEditor(stage,{getScene,getObjects,onCommit,onSelectio
  }
  function update(scene,options={}){
   busy=!!options.busy;
+  if(Object.hasOwn(options,'resetBusy'))resetBusy=!!options.resetBusy;
   if(Object.hasOwn(options,'drawing'))drawing=!!options.drawing;
   if(Object.hasOwn(options,'motionPlaying'))motionPlaying=!!options.motionPlaying;
   if(selectedId){const [kind,index]=selectedId.split(':');if(!TYPES[kind]||Number(index)>=scene[TYPES[kind].key])selectedId=null;}
@@ -84,6 +91,8 @@ export function mountDirectEditor(stage,{getScene,getObjects,onCommit,onSelectio
   dock.hidden=!selectedId&&!clipboard;shape.hidden=kind!=='tree';
   for(const node of [copy,duplicate,remove])node.disabled=busy||drawing||!selectedId;
   paste.disabled=busy||drawing||!clipboard;add.disabled=busy||drawing;trajectory.disabled=busy;undo.disabled=busy||drawing;
+  // A reset cancels previews itself; only actual synchronization blocks it.
+  reset.disabled=resetBusy??busy;
   draw.disabled=busy;draw.textContent=drawing?'取消绘制':'画落叶路线';draw.setAttribute('aria-pressed',String(drawing));
   motion.textContent=motionPlaying?'Ⅱ':'▶';motion.setAttribute('aria-label',motionPlaying?'暂停风景动画':'播放风景动画');motion.setAttribute('aria-pressed',String(motionPlaying));
   additions.forEach((node,index)=>{const type=Object.values(TYPES)[index];node.disabled=busy||drawing||scene[type.key]>=SCENE_LIMITS[type.key].max;});
@@ -122,5 +131,5 @@ export function mountDirectEditor(stage,{getScene,getObjects,onCommit,onSelectio
  };
  stage.addEventListener('pointerdown',clearSelection);
  update(getScene());
- return {select,update,get selectedId(){return selectedId;},destroy(){document.removeEventListener('keydown',keydown);document.removeEventListener('pointerdown',activate,{capture:true});document.removeEventListener('focusin',activate,{capture:true});stage.removeEventListener('pointerdown',clearSelection);if(addedTabIndex)stage.removeAttribute('tabindex');tools.remove();dock.remove();}};
+ return {select,update,reset(){clipboard=null;menu.hidden=true;add.setAttribute('aria-expanded','false');select(null);},get selectedId(){return selectedId;},destroy(){document.removeEventListener('keydown',keydown);document.removeEventListener('pointerdown',activate,{capture:true});document.removeEventListener('focusin',activate,{capture:true});stage.removeEventListener('pointerdown',clearSelection);if(addedTabIndex)stage.removeAttribute('tabindex');tools.remove();dock.remove();}};
 }
