@@ -1,4 +1,6 @@
 import {createDocument,validateDocument,updateDocument,evaluateExport,evaluateContexts,filterRows,toCsv,serializeDocument,parseDocument,encodeFragment,decodeFragment,LIMITS} from './canvas-model.mjs';
+import {mountCollaboration} from './collaboration-ui.mjs';
+import {revisionOf} from './collaboration-model.mjs';
 const $=s=>document.querySelector(s);
 const $$=s=>Array.from(document.querySelectorAll(s));
 const esc=value=>String(value??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -7,6 +9,7 @@ const STORAGE='teamlink-creative-canvas-v1';
 let spec=createDocument(),baseline=null,undo=[],redo=[],stepId='before',lastGroup='',lastEdit=0;
 let fromShared=false,storageOkay=true,playing=null,toastTimer,errorTimer,drag=null;
 const composing=new WeakSet();
+let collaboration=null,activeView='canvas';
 try{
  if(location.hash.startsWith('#doc=')){
   spec=decodeFragment(location.hash);fromShared=true;try{const saved=JSON.parse(sessionStorage.getItem(STORAGE+'-shared')||'null');if(saved&&serializeDocument(validateDocument(saved.document))===serializeDocument(spec))baseline=saved.baseline?validateDocument(saved.baseline):null;}catch{}
@@ -55,20 +58,20 @@ function updateProduct(result){
  const months=Array.from(new Set(['all',...spec.data.map(r=>r.date.slice(0,7)),spec.filters.month,frame.filters.month]));
  const categories=Array.from(new Set(['全部',...spec.data.map(r=>r.category),spec.filters.category,frame.filters.category]));
  selectOptions($('#filter-month'),months,frame.filters.month,monthLabel);selectOptions($('#filter-category'),categories,frame.filters.category);
- $('#original-selection').textContent='第一次选择：'+filterLabel(result.initialFilters)+' · '+result.rows.length+' 条。现在停在第 '+(index+1)+' / '+result.trace.length+' 个状态。';
+ $('#original-selection').textContent='选择：'+filterLabel(result.initialFilters)+' · '+result.rows.length+' 条记录';
  const mode=frame.status==='timeout'?'error':frame.status==='success'?'success':'';
  $('#product-status').className='product-status '+mode;
  $('#status-icon').textContent=frame.status==='timeout'?'!':frame.status==='success'?'✓':frame.status==='pending'?'↗':'○';
  const names={before:'操作之前','initial-request':'第一次请求','initial-timeout':'第一次超时','retry-request':'再次请求','retry-success':'收到文件','retry-timeout':'重试仍超时','initial-success':'直接完成'};
- $('#state-kicker').textContent=(names[frame.id]??frame.id)+' · '+ms(frame.atMs)+' ms';
+ $('#state-kicker').textContent=({idle:'尚未导出',pending:'正在导出',timeout:'导出超时',success:'导出完成'})[frame.status];
  const key=frame.status==='timeout'?'errorMessage':frame.status==='success'?'successMessage':frame.status==='idle'?'subtitle':null;
  const msg=$('#state-message');
  if(key){msg.dataset.content=key;msg.setAttribute('contenteditable','plaintext-only');msg.setAttribute('role','textbox');msg.setAttribute('aria-label','当前状态的可编辑文案');msg.classList.add('editable');updateText(msg,spec.content[key]);}
  else{delete msg.dataset.content;msg.removeAttribute('contenteditable');msg.removeAttribute('role');msg.classList.remove('editable');msg.textContent=frame.message;}
  $('#state-detail').textContent=frame.status==='success'?'文件含 '+frame.outputRows.length+' 条。对照下方原本选择的记录，检查是否有多出或遗漏。':frame.status==='timeout'?'当前界面显示：'+filterLabel(frame.filters)+'。实际请求参数在下方轨迹中可见。':frame.status==='pending'?'请求使用：'+filterLabel(frame.requestFilters)+'，请求 '+frame.requestRows.length+' 条。':'可以先改文案、规则或数据，也可以点箭头回放一次。';
- $('#download').disabled=!result.completed;$('#download').title=result.completed?'下载由当前规则实际计算的文件':'两次尝试都超时，没有文件';
+ $('#download').disabled=frame.status!=='success';$('#download').title=frame.status==='success'?'下载当前成功状态的文件':'这一步尚未生成文件；可在下方下载完整计算结果';
  $('#product-matches').textContent='当前画面匹配 '+frame.rows.length+' / '+spec.data.length+' 条';
- $('#time-scrub').max=String(result.trace.length-1);$('#time-scrub').value=String(index);$('#time-label').textContent=ms(frame.atMs)+' ms · '+(index+1)+'/'+result.trace.length;
+ $('#time-scrub').max=String(result.trace.length-1);$('#time-scrub').value=String(index);$('#time-label').textContent=(names[frame.id]??frame.id)+' · '+ms(frame.atMs)+' ms';
 }
 function cardValues(result){
  return [
@@ -116,10 +119,32 @@ function updateOutput(result){
  if(!result.outputRows.length){$('#output-preview').innerHTML='<p class="empty-output">筛选结果为空。当前文件只会包含表头，你仍可以实际下载核对。</p>';return;}
  $('#output-preview').innerHTML='<table class="file-table"><thead><tr><th>日期</th><th>分类</th><th>文件里的实际内容</th><th>金额</th><th>与初始选择比较</th></tr></thead><tbody>'+result.outputRows.map(row=>`<tr class="${selected.has(row.id)?'':'extra'}"><td>${esc(row.date)}</td><td>${esc(row.category)}</td><td>${esc(row.title)}</td><td>${esc(row.amount??'')}</td><td>${selected.has(row.id)?'原本选中':'多出的一条'}</td></tr>`).join('')+'</tbody></table><p class="output-caption">这些行直接构成下载文件。浅色标出原选择之外的内容；它们没有被隐藏或自动纠正。</p>';
 }
+function updateLiveResult(result){
+ const checked=result.assertions.filter(a=>a.status==='passed').length;
+ const match=result.assertions.find(a=>a.id==='file-matches').actual;
+ const requestCount=result.retried?result.retryRows.length:result.rows.length;
+ $('#live-outcome').classList.toggle('has-issue',result.assertions.some(a=>a.status==='failed'));
+ $('#live-outcome').innerHTML=`<div class="causal-chain"><span>最初选择 <b>${result.rows.length}</b> 条</span><span class="chain-arrow">→</span><span>${result.retried?'重试':'首次'}请求 <b>${requestCount}</b> 条</span><span class="chain-arrow">→</span><span>最终文件 <b>${result.completed?result.outputRows.length:'—'}</b> ${result.completed?'条':'未生成'}</span></div><button data-open-view="verify" class="live-check">${checked} / ${result.assertions.length} 项符合期望 ↗</button>`;
+ $('#live-file-explanation').textContent=result.completed?(match?'与最初选择一致。':'与最初选择不同。')+'这里是完整规则计算的终态，与上方回放位置无关。':'当前两次尝试均超时，没有可下载的文件。';
+ $('#download-result').disabled=!result.completed;
+ const selected=new Set(result.rows.map(r=>r.id));
+ const rows=result.outputRows.slice(0,4);
+ $('#live-file-preview').innerHTML=rows.length?`<div class="mini-file">${rows.map(row=>`<div class="mini-file-row ${selected.has(row.id)?'':'extra'}"><span>${esc(row.title)}</span><span>${esc(row.category)}</span><b>${esc(row.amount??'—')}</b><small>${selected.has(row.id)?'原选择':'多出'}</small></div>`).join('')}</div><p class="output-caption">显示 ${rows.length} / ${result.outputRows.length} 条${result.outputRows.length>4?' · 打开“数据与文件”查看全部':''}</p>`:`<p class="empty-output">${result.completed?'筛选为空，文件只有表头。':'没有生成文件。修改规则或耗时假设再试。'}</p>`;
+}
+function showView(view){
+ activeView=view;document.body.dataset.view=view;
+ $$('[data-workview]').forEach(panel=>panel.hidden=panel.dataset.workview!==view);
+ $$('.work-tabs [data-view]').forEach(button=>button.setAttribute('aria-pressed',String(button.dataset.view===view)));
+}
+function focusAnchor(anchor){
+ const targets={content:['canvas','#product'],rules:['canvas','.rules'],data:['data','.data-section'],expectations:['verify','.assertions-panel']};
+ const [view,selector]=targets[anchor]??targets.content;showView(view);
+ const target=$(selector);target.scrollIntoView({block:'center',behavior:'smooth'});target.classList.add('highlight');setTimeout(()=>target.classList.remove('highlight'),1800);
+}
 function render(){
  const result=evaluateExport(spec);document.body.dataset.completed=String(result.completed);document.body.dataset.outputCount=String(result.outputRows.length);document.body.dataset.inputPreserved=String(result.assertions[0].actual);
  $('#mobile-result').textContent='首次 '+result.rows.length+' 条 → 请求 '+(result.retried?result.retryRows.length:result.rows.length)+' 条 → '+(result.completed?'文件 '+result.outputRows.length+' 条':'没有文件');
- updateProduct(result);updateRules(result);updateTrace(result);updateContexts();updateAssertions(result);updateData(result);updateOutput(result);
+ updateProduct(result);updateRules(result);updateTrace(result);updateContexts();updateAssertions(result);updateData(result);updateOutput(result);updateLiveResult(result);collaboration?.onDocumentChange();
  $('#undo').disabled=!undo.length;$('#redo').disabled=!redo.length;$('#storage-state').textContent=storageOkay?'本浏览器保存 · 无需登录':'暂未保存 · 可导出 JSON 留存';
 }
 function readEditor(node){
@@ -144,6 +169,8 @@ document.addEventListener('change',event=>{
 });
 document.addEventListener('click',event=>{
  const button=event.target.closest('button');if(!button||button.disabled)return;
+ if(button.dataset.view)showView(button.dataset.view);
+ if(button.dataset.openView)showView(button.dataset.openView);
  if(button.dataset.retry)change({rules:{retrySource:button.dataset.retry}});
  if(button.dataset.step){stepId=button.dataset.step;render();if(innerWidth<761)$('#product-status').scrollIntoView({block:'center',behavior:'smooth'});}
  if(button.dataset.context){const context=evaluateContexts(spec).find(c=>c.id===button.dataset.context);change({networkMultiplier:context.networkMultiplier,retryNetworkMultiplier:context.retryNetworkMultiplier});}
@@ -157,12 +184,14 @@ $('#baseline').addEventListener('click',()=>{baseline=validateDocument(spec);per
 $('#clear-baseline').addEventListener('click',()=>{baseline=null;persist();render();});
 $('#reset').addEventListener('click',()=>{stepId='before';$$('[data-invalid-message]').forEach(n=>{delete n.dataset.invalidMessage;n.removeAttribute('aria-invalid');});clearPendingEditors();if(commit(createDocument())){syncActiveAfterHistory();dataSignature='';render();toast('已回到最初的作品。撤销可以找回刚才的想法。');}});
 function stopPlaying(){clearInterval(playing);playing=null;$('#play').textContent='▶';}
-function play(){stopPlaying();const result=evaluateExport(spec);stepId=result.trace[0].id;render();$('#play').textContent='Ⅱ';playing=setInterval(()=>{const result=evaluateExport(spec);const index=result.trace.findIndex(t=>t.id===stepId);if(index>=result.trace.length-1){stopPlaying();return;}stepId=result.trace[index+1].id;render();},650);}
-$('#show-process').addEventListener('click',()=>$('.process-section').scrollIntoView({block:'start',behavior:'smooth'}));
+function play(){$('#prototype-playback').open=true;stopPlaying();const result=evaluateExport(spec);stepId=result.trace[0].id;render();$('#play').textContent='Ⅱ';playing=setInterval(()=>{const result=evaluateExport(spec);const index=result.trace.findIndex(t=>t.id===stepId);if(index>=result.trace.length-1){stopPlaying();return;}stepId=result.trace[index+1].id;render();},650);}
+$('#show-process').addEventListener('click',()=>{showView('verify');$('.process-section').scrollIntoView({block:'start',behavior:'smooth'});});
 $('#play').addEventListener('click',()=>playing?stopPlaying():play());$('#run').addEventListener('click',play);
 $('#time-scrub').addEventListener('input',event=>{stopPlaying();const trace=evaluateExport(spec).trace;stepId=trace[Number(event.target.value)].id;render();});
 function download(name,text,type){const url=URL.createObjectURL(new Blob([text],{type}));const a=document.createElement('a');a.href=url;a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);}
-$('#download').addEventListener('click',()=>{const result=evaluateExport(spec);if(!result.completed)return;const title=spec.content.title.replace(/[\\/:*?"<>|]/g,'_').trim().slice(0,60)||'TeamLink导出';download(title+'.csv',toCsv(result.outputRows,{bom:true}),'text/csv;charset=utf-8');toast('下载的就是下面这些行，由当前规则与数据算出。');});
+function downloadCsv(rows){const title=spec.content.title.replace(/[\\/:*?"<>|]/g,'_').trim().slice(0,60)||'TeamLink导出';download(title+'.csv',toCsv(rows,{bom:true}),'text/csv;charset=utf-8');}
+$('#download').addEventListener('click',()=>{const {frame}=currentFrame(evaluateExport(spec));if(frame.status==='success'){downloadCsv(frame.outputRows);toast('已下载当前成功状态的文件。');}});
+$('#download-result').addEventListener('click',()=>{const result=evaluateExport(spec);if(result.completed){downloadCsv(result.outputRows);toast('已下载当前规则计算的终态文件。');}});
 $('#add-row').addEventListener('click',()=>{if(spec.data.length>=LIMITS.rows){problem('这张作品最多支持 '+LIMITS.rows+' 条记录。');return;}clearPendingEditors();let n=spec.data.length+1;while(spec.data.some(r=>r.id==='row-'+n))n++;change({data:[...spec.data,{id:'row-'+n,date:'2026-10-31',category:'产品',title:'直接修改这条新记录',amount:0}]});});
 async function copy(text){try{await navigator.clipboard.writeText(text);return true;}catch{return false;}}
 $('#copy-spec').addEventListener('click',async()=>{
@@ -179,7 +208,7 @@ $('#copy-link').addEventListener('click',async()=>{if(await copy($('#share-url')
 document.addEventListener('keydown',event=>{
  if(event.isComposing)return;
  if(event.key==='Enter'&&event.target.matches('[data-content],[data-cell]')){event.preventDefault();event.target.blur();return;}
- if((event.ctrlKey||event.metaKey)&&event.key.toLowerCase()==='z'&&!dialog.open){event.preventDefault();(event.shiftKey?$('#redo'):$('#undo')).click();}
+ if((event.ctrlKey||event.metaKey)&&event.key.toLowerCase()==='z'&&!dialog.open&&!event.target.closest('#collaboration')){event.preventDefault();(event.shiftKey?$('#redo'):$('#undo')).click();}
 });
 function clearHighlight(){$$('.highlight').forEach(n=>n.classList.remove('highlight'));}
 $('#trace-cards').addEventListener('pointerover',event=>{const card=event.target.closest('[data-reason]');if(!card)return;clearHighlight();const target=card.dataset.reason==='filter-row'?$('.filter-row'):card.dataset.reason==='output-section'?$('.output-section'):$('#'+card.dataset.reason);target?.classList.add('highlight');});
@@ -187,5 +216,13 @@ $('#trace-cards').addEventListener('pointerleave',clearHighlight);
 $('#timeout').addEventListener('pointerdown',event=>{if(event.button!==0)return;drag={x:event.clientX,value:spec.rules.timeoutMs,moved:false,pointer:event.pointerId};event.target.setPointerCapture(event.pointerId);lastGroup='';});
 $('#timeout').addEventListener('pointermove',event=>{if(!drag||drag.pointer!==event.pointerId)return;const delta=event.clientX-drag.x;if(Math.abs(delta)<5&&!drag.moved)return;drag.moved=true;const next=Math.max(0,Math.min(LIMITS.timeoutMs,Math.round((drag.value+delta*10)/10)*10));event.target.value=String(next);change({rules:{timeoutMs:next}},{group:'scrub-timeout',element:event.target});});
 $('#timeout').addEventListener('pointerup',()=>{drag=null;lastGroup='';});$('#timeout').addEventListener('pointercancel',()=>{drag=null;lastGroup='';});
-window.addEventListener('hashchange',()=>{if(!location.hash.startsWith('#doc='))return;try{const next=decodeFragment(location.hash);fromShared=true;stepId='before';commit(next);}catch(error){problem(error.message);}});
+window.addEventListener('hashchange',()=>{if(!location.hash.startsWith('#doc='))return;try{decodeFragment(location.hash);location.reload();}catch(error){problem(error.message);}});
 render();
+let projectStorage;try{projectStorage=fromShared?sessionStorage:localStorage;}catch{}
+collaboration=mountCollaboration({
+ getDocument:()=>spec,
+ replaceDocument:next=>{clearPendingEditors();stepId='before';return commit(next);},
+ setBaseline:next=>{baseline=validateDocument(next);persist();render();showView('verify');},
+ focusAnchor,notify:toast,storage:projectStorage,
+ storageKey:'teamlink-project-v1'+(fromShared?'-shared-'+revisionOf(spec):''),
+});
