@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'none'; base-uri 'none'; form-action 'self'">
+  <meta name="theme-color" content="#176d67">
+  <title>TeamLink · 少重复解释，把需求一路交到验收</title>
+  <meta name="description" content="用90秒亲手体验需求确认、研发接单、具体退回与逐项验收。独立演示数据，无需登录或安装。">
+  <meta property="og:title" content="TeamLink · 把需求一路交到验收">
+  <meta property="og:description" content="一个任务、一份确认版本，把产品和研发的交接接起来。打开即可体验。">
+  <link rel="icon" href="./assets/logo.svg" type="image/svg+xml"><link rel="stylesheet" href="./style.css">
+</head>
+<body>
+  <a class="skip-link" href="#workspace">跳到体验区</a>
+  <header class="site-header wrap">
+    <a class="brand" href="./" aria-label="TeamLink首页"><span class="brand-mark" aria-hidden="true"><i></i><i></i></span>TeamLink</a>
+    <nav aria-label="主导航"><span class="mode-badge"><span></span>公开体验</span><button class="text-button" id="share-open">扫码体验 <span aria-hidden="true">↗</span></button><a class="github-link" href="https://github.com/yaowenhu-pm/teamlink-demo" target="_blank" rel="noopener noreferrer">GitHub <span aria-hidden="true">↗</span></a></nav>
+  </header>
+  <main>
+    <section class="hero wrap" aria-labelledby="hero-title">
+      <p class="eyebrow">CODEX × 飞书 × GITHUB</p><h1 id="hero-title">少重复解释，<br class="mobile-break">把需求一路交到验收<span>。</span></h1>
+      <p class="hero-copy">亲手走一遍：说清需求、交给研发、带证据交付，再按同一标准验收。</p>
+      <div class="hero-bottom"><span class="time-label"><span aria-hidden="true">◷</span> 约90秒 · 无需登录或安装</span><p>独立演示数据。角色与工程记录均为样例，不会写入真实团队。</p></div>
+    </section>
+    <section class="wrap workspace" id="workspace" tabindex="-1" aria-label="TeamLink互动体验"><div id="app"><p class="loading">正在打开体验…</p></div></section>
+    <section class="wrap explanation" aria-labelledby="why-title">
+      <div><p class="eyebrow">它连接的是什么</p><h2 id="why-title">每个人继续用自己的工具，<br>交接时终于说的是同一件事。</h2></div>
+      <div class="explanation-items"><article><span>01</span><h3>确定哪一版</h3><p>确认后的需求和验收项固定下来。改要求先确认新版，旧交付不会混成新结果。</p></article><article><span>02</span><h3>明确下一步归谁</h3><p>派给研发与研发接单分开记录。交付要有说明、入口和逐项结果。</p></article><article><span>03</span><h3>让验收有依据</h3><p>检查通过以后，再记录人的实际体验。具体退回哪一项，补交时能接着往下做。</p></article></div>
+    </section>
+    <section class="wrap questions" aria-label="体验说明">
+      <details><summary>这个公开体验会调用真实 Agent、飞书或 GitHub 吗？</summary><p>本页使用可操作的演示规则、示例交付物和虚构成员，不调用实时大模型、不运行研发代码、不读写真实飞书或GitHub。它让你先体验协作机制。团队版由每位成员在自己的Codex理解与执行工作，TeamLink维护共享版本、交付和验收记录；跨设备团队接入仍需要部署与授权。</p></details>
+      <details><summary>我输入的内容保存在哪里？</summary><p>只保存在当前浏览器的演示存档中，不上传到服务器。点击“重新体验”可以清除这段演示。微信、飞书与其他浏览器之间不会自动同步。</p></details>
+      <details><summary>怎样让其他人体验？</summary><p>点击右上角“扫码体验”，复制同一网址或保存二维码；微信、飞书中也可分享这个链接。GitHub首页提供相同入口。若内置浏览器限制访问，可以选择“在浏览器打开”。</p></details>
+    </section>
+  </main>
+  <footer class="wrap site-footer"><span class="brand small">TeamLink</span><p>把个人 Agent 的工作，接成团队的一次交付。</p><span>ClawHunt · 互动体验</span></footer>
+  <dialog id="share-dialog" aria-labelledby="share-title"><button class="dialog-close" id="share-close" aria-label="关闭分享">×</button><span class="mode-badge">打开即可体验</span><h2 id="share-title">把这次交接，带给更多人。</h2><p>用微信、飞书或手机相机扫码。</p><img class="qr-image" src="./assets/teamlink-qr.png" alt="TeamLink公开体验二维码" width="236" height="236"><label class="sr-only" for="share-url">体验链接</label><input id="share-url" class="share-url" readonly value="https://teamlink-handoff.yaowen-hu.chatgpt.site"><div class="dialog-actions"><button id="copy-share" class="primary">复制体验链接</button><a class="secondary" download="TeamLink-体验二维码.png" href="./assets/teamlink-qr.png">保存二维码</a></div><p class="caption">分享的是体验入口，不包含你的演示输入和进度。</p></dialog>
+  <div id="toast" role="status" aria-live="polite"></div>
+  <noscript><p class="wrap error-message">体验需要浏览器开启 JavaScript。</p></noscript>
+  <script type="module" src="./app.mjs"></script>
+</body></html>
