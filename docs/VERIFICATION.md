@@ -1,3 +1,11 @@
+# TeamLink GitHub 项目图标 · 2026-11-01（已发布）
+
+- 首页导航新增独立 GitHub 图标，手势页顶部工具栏也提供相同入口；使用内联 SVG、明确的可访问名称和悬停提示，在新标签打开 `https://github.com/yaowenhu-pm/teamlink-demo`，带 `noopener noreferrer`。首页手机导航收起时图标仍显示。
+- 本地与国内生产两处图标均实际点击，弹出页 URL 与目标仓库一致。生产首页 1440px、320px 及手势页 320px 下入口可见，页面无横向溢出；手势相机保持 off，vendor 请求 0。
+- 完整 175 项测试、构建与差异检查通过。release `20261101-github-links-v10` 仅替换 4 个前端文件，served SHA、CSS 缓存及 health/readiness 正常；主站 world `6d84d6892e78` 保持，CSS 为 `9dbbd9c50b02`。未改后端、数据库、模型配置或其他站点。
+
+---
+
 # TeamLink 手势识别加载反馈修复 · 2026-11-01（已发布）
 
 - 用户截图显示相机已开启，识别仍处于加载阶段。独立公网 GET 测得旧链路 WASM 31.07 秒、模型 43.86 秒，原界面没有进度和超时；截图不足以判断真人捏合是否有效。
