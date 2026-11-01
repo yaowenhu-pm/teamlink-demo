@@ -80,14 +80,28 @@
     "mainBundleImpact": "No npm dependency or build configuration was changed.",
     "integrationHelper": {
       "path": "/gesture-loading.mjs",
-      "bytes": 8687,
-      "sha256": "96458d4a6fb6830c0a88a90b5eabb9133d28618fe9947ff89418aeac79134dc1"
+      "bytes": 14083,
+      "sha256": "235a9d3bc1679f3bf8ff6f3115a79b9f10664afd57bea998f37f36608f88d1bf"
     },
     "loadingLimits": {
       "downloadIdleMs": 45000,
       "overallMs": 180000,
       "initializationMs": 30000,
       "cache": "?v=<content SHA-256 first 12> enables immutable cache; Blob is revoked after real initialization settles."
+    },
+    "persistentAssetCache": {
+      "name": "teamlink-hand-vision-assets-v1",
+      "scope": "Opt-in WASM and model only; exact size and SHA-256 checked before use/store. Cache key contains full content SHA. Storage failure falls back to normal fetch/HTTP cache.",
+      "progressFields": [
+        "phase",
+        "loaded",
+        "total",
+        "cacheLoaded",
+        "fetchLoaded",
+        "cacheAvailable"
+      ],
+      "fetchLoadedMeaning": "Decoded bytes returned by fetch, including ordinary HTTP cache; not a measurement of physical network transfer.",
+      "offlineBoundary": "Cached WASM/model may be reused offline; this does not guarantee the HTML or runtime JS are available offline."
     }
   },
   "documentation": {
@@ -102,11 +116,13 @@
       "model matched Google Storage MD5 and ZIP CRC",
       "Node import and FilesetResolver default SIMD and simulated no-SIMD fallback filenames checked",
       "loader syntax checked",
-      "2026-11-01 loading fix: 8 stream/cancel/timeout/native-cleanup tests and local browser Blob-WASM + model-buffer IMAGE inference (two hands, 21 landmarks each)."
+      "2026-11-01 loading fix: 8 stream/cancel/timeout/native-cleanup tests and local browser Blob-WASM + model-buffer IMAGE inference (two hands, 21 landmarks each).",
+      "2026-11-01 persistent asset cache: 17 tests cover SHA validation, warm/offline reads, corrupted-cache repair, API/quota fallback, cancellation and native initialization cleanup.",
+      "Local integration: actual native VIDEO inference on a public-image synthetic stream returned one hand / 21 landmarks with visible SVG bones; asset fetch blocked while CacheStorage supplies both model files. Controlled landmarks separately exercised sun/boat movement, release, undo, loss/mode/blur cancellation."
     ],
     "notPerformed": [
-      "Real camera permission or physical camera operation",
-      "End-to-end browser inference (belongs to integration QA)"
+      "Physical camera interaction QA for v2 gestures",
+      "Physical mobile-device testing"
     ]
   },
   "files": [
@@ -168,8 +184,8 @@
     },
     {
       "path": "loader.mjs",
-      "bytes": 2241,
-      "sha256": "9932db2a4039cb8b02506e0e1c65322c442c3620c0d89e323b9a775fad49f9c7",
+      "bytes": 2490,
+      "sha256": "d84acb664ca0ecfdf0027eefee9287b33f8ccc2eda972d20635a5603b5793556",
       "role": "TeamLink integration wrapper; authored locally."
     },
     {
@@ -179,6 +195,6 @@
       "role": "TeamLink attribution and redistribution record; authored locally."
     }
   ],
-  "runtimeBytes": 36042504,
+  "runtimeBytes": 36042753,
   "manifestNote": "manifest.json records other files and intentionally does not recursively hash itself."
 }

@@ -31,6 +31,7 @@ export class PinchTracker {
    * Only one hand is accepted. A first closed hand must open before starting.
    * phase: hover | start | move | end | cancel | lost. Only end is a release;
    * cancel/lost must never be interpreted by the caller as a completed drag.
+   * pinchProgress is 0 for open and 1 for closed, or null when tracking is lost.
    */
   update(frame = {}) {
     if (!frame || typeof frame !== 'object') return this.cancel('invalid-frame');
@@ -83,7 +84,8 @@ export class PinchTracker {
       phase = 'start';
     }
     return {cursor: {...this.cursor}, phase, pinching: this.active, ready: this.armed,
-      confidence, lost: false, reason: !this.active && !this.armed ? 'release-to-arm' : null, pinchRatio};
+      confidence, lost: false, reason: !this.active && !this.armed ? 'release-to-arm' : null, pinchRatio,
+      pinchProgress: clamp((this.options.openRatio - pinchRatio) / (this.options.openRatio - this.options.closeRatio))};
   }
 
   cancel(reason = 'cancelled') {
@@ -93,7 +95,7 @@ export class PinchTracker {
     this.cursor = null;
     this.timestampMs = null;
     this.handId = null;
-    return {cursor: null, phase, pinching: false, ready: false, confidence: 0, lost: true, reason, pinchRatio: null};
+    return {cursor: null, phase, pinching: false, ready: false, confidence: 0, lost: true, reason, pinchRatio: null, pinchProgress: null};
   }
 }
 
@@ -115,6 +117,39 @@ export function createHourDrag({hoursPerWidth = 24} = {}) {
       return hour;
     },
     end() {const result = hour; cancel(); return result;},
+    cancel,
+  };
+}
+
+/**
+ * Relative 2D dragging preserves the cursor-to-object grab offset. Bounds and
+ * coordinates are normalized; an initial object outside its bounds is clamped.
+ * Only end returns a completed position. Call cancel for a lost/changed hand.
+ */
+export function createObjectDrag({xBounds = [0, 1], yBounds = [0, 1]} = {}) {
+  const validBounds = bounds => Array.isArray(bounds) && bounds.length === 2
+    && Array.from(bounds).every(value => Number.isFinite(value) && value >= 0 && value <= 1)
+    && bounds[0] <= bounds[1];
+  if (!validBounds(xBounds) || !validBounds(yBounds)) throw new RangeError('Invalid object drag bounds');
+  const [minX, maxX] = xBounds, [minY, maxY] = yBounds;
+  let grab = null, position = null;
+  const cancel = () => {grab = null; position = null; return null;};
+  return {
+    start(cursor, currentAnchor) {
+      if (!validPoint(cursor) || !validPoint(currentAnchor)) return cancel();
+      position = {x: clamp(currentAnchor.x, minX, maxX), y: clamp(currentAnchor.y, minY, maxY)};
+      grab = {cursor: {x: cursor.x, y: cursor.y}, anchor: {...position}};
+      return {...position};
+    },
+    move(cursor) {
+      if (!grab || !validPoint(cursor)) return cancel();
+      position = {
+        x: clamp(grab.anchor.x + (cursor.x - grab.cursor.x), minX, maxX),
+        y: clamp(grab.anchor.y + (cursor.y - grab.cursor.y), minY, maxY),
+      };
+      return {...position};
+    },
+    end() {const result = position && {...position}; cancel(); return result;},
     cancel,
   };
 }

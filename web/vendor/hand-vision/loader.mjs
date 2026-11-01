@@ -1,7 +1,7 @@
 // Same-origin, opt-in entry point for the pinned MediaPipe vision runtime.
 // Import this module only after the visitor enables the camera experiment.
 import { FilesetResolver, HandLandmarker } from './vision_bundle.mjs';
-import { createGestureTaskLoader } from '../../gesture-loading.mjs?v=96458d4a6fb6';
+import { createGestureTaskLoader } from '../../gesture-loading.mjs?v=235a9d3bc167';
 
 export { FilesetResolver, HandLandmarker };
 
@@ -20,6 +20,7 @@ const pinnedAssets = new Map([
 ].map(([path, bytes, sha256]) => [new URL(path, import.meta.url).href, {bytes, sha256}]));
 
 const loadTask = createGestureTaskLoader({
+  persistentCache: true,
   // Keep useModule=false: this pinned copy includes the classic resolver pair.
   resolveFileset: () => FilesetResolver.forVisionTasks(handVisionAssets.wasmRoot),
   modelUrl: handVisionAssets.modelAssetPath,
@@ -34,8 +35,11 @@ const loadTask = createGestureTaskLoader({
 
 /**
  * Opt-in local CPU task; IMAGE and VIDEO options remain supported.
- * loadOptions: {signal, onProgress({phase, loaded, total})}. Decoded byte counts
- * cover the selected WASM and pinned model. No camera is requested here.
+ * loadOptions: {signal, onProgress({phase, loaded, total, cacheLoaded,
+ * fetchLoaded, cacheAvailable})}. Decoded byte counts cover the selected WASM
+ * and pinned model. fetchLoaded can include browser HTTP-cache bytes; validated
+ * CacheStorage hits appear in cacheLoaded during checking-cache. Cache access
+ * starts only with this explicit call. No camera is requested here.
  */
 export function createHandLandmarker(taskOptions = {}, loadOptions = {}) {
   return loadTask(taskOptions, loadOptions);
