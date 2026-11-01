@@ -44,14 +44,14 @@
     "importPolicy": "Dynamically import the same-origin entry only when the visitor opts into the experiment. Do not statically bundle or preload it.",
     "defaultOptions": {
       "baseOptions": {
-        "modelAssetPath": "./hand_landmarker.task (resolved against import.meta.url)",
+        "modelAssetBuffer": "Pinned model fetched into Uint8Array after opt-in",
         "delegate": "CPU"
       },
       "runningMode": "VIDEO",
       "numHands": 1
     },
-    "wrapperAssetPolicy": "createHandLandmarker accepts task options but pins baseOptions to the same-origin model and CPU. It never requests a camera stream.",
-    "wasmResolver": "FilesetResolver.forVisionTasks(new URL(\"./wasm\", import.meta.url).href); keep default useModule=false.",
+    "wrapperAssetPolicy": "createHandLandmarker(taskOptions, {signal,onProgress}) downloads pinned same-origin WASM and model concurrently with real decoded-byte progress, cancellation and timeouts; pins CPU and modelAssetBuffer. It never requests a camera stream.",
+    "wasmResolver": "Resolve the default classic SIMD/noSIMD fileset; fetch only its selected WASM via a SHA-versioned URL, initialize from a temporary WASM Blob URL and close abandoned native results. Native initialization is serialized.",
     "simdFiles": [
       "wasm/vision_wasm_internal.js",
       "wasm/vision_wasm_internal.wasm"
@@ -77,7 +77,18 @@
       "upstream README"
     ],
     "visionWasmScope": "Official vision runtime contains shared vision calculators and both CPU/GPU code paths. There is no separate official hand-only WASM binary. No separate GPU, audio, gen-AI, or gesture-recognizer model is shipped.",
-    "mainBundleImpact": "No npm dependency or build configuration was changed."
+    "mainBundleImpact": "No npm dependency or build configuration was changed.",
+    "integrationHelper": {
+      "path": "/gesture-loading.mjs",
+      "bytes": 8687,
+      "sha256": "96458d4a6fb6830c0a88a90b5eabb9133d28618fe9947ff89418aeac79134dc1"
+    },
+    "loadingLimits": {
+      "downloadIdleMs": 45000,
+      "overallMs": 180000,
+      "initializationMs": 30000,
+      "cache": "?v=<content SHA-256 first 12> enables immutable cache; Blob is revoked after real initialization settles."
+    }
   },
   "documentation": {
     "webGuide": "https://developers.google.com/edge/mediapipe/solutions/vision/hand_landmarker/web_js",
@@ -90,7 +101,8 @@
       "npm archive SHA-512 matched registry integrity",
       "model matched Google Storage MD5 and ZIP CRC",
       "Node import and FilesetResolver default SIMD and simulated no-SIMD fallback filenames checked",
-      "loader syntax checked"
+      "loader syntax checked",
+      "2026-11-01 loading fix: 8 stream/cancel/timeout/native-cleanup tests and local browser Blob-WASM + model-buffer IMAGE inference (two hands, 21 landmarks each)."
     ],
     "notPerformed": [
       "Real camera permission or physical camera operation",
@@ -156,8 +168,8 @@
     },
     {
       "path": "loader.mjs",
-      "bytes": 1099,
-      "sha256": "d50764974fd17afaf33dfaf04f81a7b82410833d814bdfdd51d2e4171ddf91e5",
+      "bytes": 2241,
+      "sha256": "9932db2a4039cb8b02506e0e1c65322c442c3620c0d89e323b9a775fad49f9c7",
       "role": "TeamLink integration wrapper; authored locally."
     },
     {
@@ -167,6 +179,6 @@
       "role": "TeamLink attribution and redistribution record; authored locally."
     }
   ],
-  "runtimeBytes": 36026662,
+  "runtimeBytes": 36042504,
   "manifestNote": "manifest.json records other files and intentionally does not recursively hash itself."
 }

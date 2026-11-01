@@ -7,7 +7,7 @@
   <meta name="referrer" content="no-referrer">
   <title>TeamLink · 伸手，拨动夕阳。</title>
   <link rel="icon" href="/assets/teamlink-icon.png">
-  <link rel="stylesheet" href="/gesture/gesture.css">
+  <link rel="stylesheet" href="/gesture/gesture.css?v=521294459098">
 </head>
 <body>
   <main id="gesture-stage" aria-label="本机摄像头手势实验">
@@ -32,16 +32,20 @@
     </aside>
     <section class="experiment-panel" aria-label="开启手势实验">
       <div class="panel-status"><span id="state-dot" class="state-dot"></span><p id="gesture-status" role="status" aria-live="polite">先开启摄像头，试着把太阳握在手里。</p><output id="hour-label" aria-label="当前时间">18:18</output></div>
+      <div id="loading-progress" class="loading-progress" hidden>
+        <progress id="loading-meter" max="100" value="0" aria-label="识别文件下载进度"></progress>
+        <span id="loading-detail">准备下载…</span>
+      </div>
       <div class="panel-actions">
         <button id="start-camera" class="primary" type="button">开启摄像头 <span aria-hidden="true">↗</span></button>
         <button id="stop-camera" class="secondary" type="button" hidden>关闭摄像头</button>
         <label class="hour-control"><span>也可拖动太阳，或调整这里</span><input id="hour-control" type="range" min="0" max="24" step="0.1" value="18.3" aria-label="手动调整太阳和时间"></label>
       </div>
-      <p id="camera-note" class="panel-note">点击后请求相机权限。首次识别文件约 23 MB，推荐电脑浏览器体验。</p>
+      <p id="camera-note" class="panel-note">先准备识别，再请求相机权限。首次下载约 10 MB，慢网可能需 1–2 分钟；之后可用缓存。</p>
       <p class="panel-footnote">本页是独立本机实验，不改动共享房间。<a href="/">回到共同创作 ↗</a></p>
     </section>
   </main>
   <noscript>请开启 JavaScript 后体验；摄像头只在你主动点击后开启。</noscript>
-  <script type="module" src="/gesture/gesture.mjs"></script>
+  <script type="module" src="/gesture/gesture.mjs?v=3025e8bb7bfb"></script>
 </body>
 </html>
