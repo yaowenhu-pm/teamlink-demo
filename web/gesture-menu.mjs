@@ -1,4 +1,4 @@
-const PAGE_SIZE = 5; // Including the three navigation buttons, at most eight.
+const PAGE_SIZE = 5; // Five content items, up to three navigation buttons, plus two fixed mode controls.
 const CATEGORIES = Object.freeze([
   ['sun', '太阳 / 月亮'], ['tree', '树'], ['mountain', '山'], ['boat', '船'],
   ['bird', '鸟'], ['flower', '花'], ['cloud', '云'], ['leaf', '落叶'],
@@ -29,14 +29,15 @@ function snapshotTargets(value) {
 
 /** Pure menu inventory and navigation. No DOM, camera, network, or callbacks. */
 export function createGestureMenuState() {
-  let targets = [], selectedId = null, scene = {}, category = 'root', page = 0;
+  let targets = [], selectedId = null, selectionMode = 'auto', scene = {}, category = 'root', page = 0;
+  const checkedMode = value => {
+    if (!['auto', 'manual'].includes(value)) throw new RangeError('Unknown gesture selection mode.');
+    return value;
+  };
   const targetItem = target => ({key: `target:${target.id}`, label: target.label, type: 'select', id: target.id,
     selected: selectedId === target.id});
   function items() {
-    if (category === 'root') return [
-      ...CATEGORIES.map(([id, label]) => ({key: `category:${id}`, label, type: 'category', id})),
-      {key: 'select:auto', label: '自动拾取', type: 'select', id: 'auto', selected: selectedId === 'auto' || selectedId === null},
-    ];
+    if (category === 'root') return CATEGORIES.map(([id, label]) => ({key: `category:${id}`, label, type: 'category', id}));
     if (category === 'actions') return ACTIONS.map(([id, label]) => ({key: `action:${id}`, label, type: 'action', id}));
     let filtered;
     if (category === 'leaf') filtered = targets.filter(target => LEAF_IDS.has(target.id));
@@ -59,23 +60,33 @@ export function createGestureMenuState() {
     footer.push(category === 'root'
       ? {key: 'action:close', label: '关闭菜单', type: 'action', id: 'close'}
       : {key: 'nav:back', label: '返回分类', type: 'nav', id: 'back'});
-    return {category, title: category === 'root' ? '选择要控制的内容'
+    const modeItems = [['auto', '自动拾取'], ['manual', '手动选择']].map(([id, label]) => ({
+      key: `mode:${id}`, label, type: 'mode', id, selected: selectionMode === id,
+    }));
+    return {category, selectionMode, modeItems, title: category === 'root' ? '选择要控制的内容'
       : CATEGORIES.find(([id]) => id === category)?.[1] ?? '选择内容',
     page, pageCount, items: all.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE), footer};
   }
   return Object.freeze({
     open(value = {}) {
       if (!value || typeof value !== 'object') throw new TypeError('Gesture menu options must be an object.');
-      targets = snapshotTargets(value.targets ?? []);
-      selectedId = typeof value.selectedId === 'string' ? value.selectedId : null;
+      const nextTargets = snapshotTargets(value.targets ?? []);
+      const nextSelectedId = typeof value.selectedId === 'string' ? value.selectedId : null;
+      const nextMode = checkedMode(value.selectionMode ?? (nextSelectedId && nextSelectedId !== 'auto' ? 'manual' : 'auto'));
+      targets = nextTargets; selectedId = nextSelectedId; selectionMode = nextMode;
       scene = value.scene && typeof value.scene === 'object' ? {trees: value.scene.trees} : {};
       category = 'root'; page = 0;
       return view();
     },
     updateTargets(value) {targets = snapshotTargets(value); return view();},
+    updateMode(mode, nextSelectedId = selectedId) {
+      const nextMode = checkedMode(mode);
+      if (nextSelectedId !== null && (typeof nextSelectedId !== 'string' || !nextSelectedId)) throw new TypeError('Invalid selected gesture target.');
+      selectionMode = nextMode; selectedId = nextSelectedId; return view();
+    },
     view,
     activate(key) {
-      const current = view(), item = [...current.items, ...current.footer].find(candidate => candidate.key === key);
+      const current = view(), item = [...current.modeItems, ...current.items, ...current.footer].find(candidate => candidate.key === key);
       if (!item || item.disabled) return null;
       if (item.type === 'category') {category = item.id; page = 0; return {type: 'navigate'};}
       if (item.type === 'nav') {
@@ -121,15 +132,15 @@ export function createGestureMenuDwell({holdMs = 500, maxGapMs = 250} = {}) {
  * Mount into an existing panel. Cursor x/y are viewport client pixels, matching
  * getBoundingClientRect(), not scene-normalized coordinates. update returns the
  * dwell feedback. enabled=false clears progress while preserving the held-button
- * latch. Gesture navigation also locks the old button's physical rectangle until
+ * latch. Gesture navigation and mode activation also lock the old button's physical rectangle until
  * a valid enabled cursor leaves it, preventing a new page from selecting whatever
  * appears in the same slot. Gaps, missing cursors, and resetDwell preserve this
  * lock; close/open clear it. Mouse clicks remain immediately available.
  * Every external label is written with textContent, never parsed as HTML.
  */
-export function mountGestureMenu(root, {onSelect = () => {}, onAction = () => {}} = {}) {
+export function mountGestureMenu(root, {onSelect = () => {}, onAction = () => {}, onModeChange = () => {}} = {}) {
   if (!root?.ownerDocument?.createElement || typeof root.replaceChildren !== 'function'
-    || typeof onSelect !== 'function' || typeof onAction !== 'function') throw new TypeError('Gesture menu requires a DOM root and callbacks.');
+    || typeof onSelect !== 'function' || typeof onAction !== 'function' || typeof onModeChange !== 'function') throw new TypeError('Gesture menu requires a DOM root and callbacks.');
   const document = root.ownerDocument, model = createGestureMenuState(), dwell = createGestureMenuDwell();
   let opened = false, buttons = [], rendered = null, blockedRegion = null;
   root.hidden = true;
@@ -155,9 +166,11 @@ export function mountGestureMenu(root, {onSelect = () => {}, onAction = () => {}
     const rect = gesture && buttons.find(button => button.dataset.menuKey === key)?.getBoundingClientRect();
     const event = model.activate(key);
     if (!event) return;
-    if (event.type === 'navigate') {
+    if (event.type === 'navigate' || event.type === 'mode') {
       if (measuredRect(rect)) blockedRegion = {left: rect.left, top: rect.top, right: rect.right, bottom: rect.bottom, lastTime: timestampMs};
-      render(); return;
+      if (event.type === 'mode') onModeChange(event.id);
+      if (opened) render();
+      return;
     }
     close();
     if (event.type === 'select') onSelect(event.id);
@@ -183,6 +196,9 @@ export function mountGestureMenu(root, {onSelect = () => {}, onAction = () => {}
     resetDwell(); buttons = []; rendered = signature;
     const title = document.createElement('h2'); title.className = 'title';
     title.textContent = `${view.title}${view.pageCount > 1 ? ` · ${view.page + 1}/${view.pageCount}` : ''}`;
+    const modeSwitch = document.createElement('div'); modeSwitch.className = 'gesture-mode-switch';
+    modeSwitch.setAttribute('role', 'group'); modeSwitch.setAttribute('aria-label', '选择方式');
+    for (const item of view.modeItems) modeSwitch.appendChild(makeButton(item));
     const grid = document.createElement('div'); grid.className = 'gesture-menu-grid';
     for (const item of view.items) grid.appendChild(makeButton(item));
     if (!view.items.length) {
@@ -191,7 +207,7 @@ export function mountGestureMenu(root, {onSelect = () => {}, onAction = () => {}
     }
     const footer = document.createElement('div'); footer.className = 'gesture-menu-footer';
     for (const item of view.footer) footer.appendChild(makeButton(item));
-    root.replaceChildren(title, grid, footer);
+    root.replaceChildren(title, modeSwitch, grid, footer);
   }
   return Object.freeze({
     open(options = {}) {
@@ -202,6 +218,7 @@ export function mountGestureMenu(root, {onSelect = () => {}, onAction = () => {}
     isOpen: () => opened,
     resetDwell,
     updateTargets(targets) {model.updateTargets(targets); if (opened) render();},
+    updateMode(mode, selectedId) {model.updateMode(mode, selectedId); if (opened) render();},
     update(cursor, timestampMs, {enabled = true} = {}) {
       const validCursor = clientPoint(cursor);
       let hit = null;

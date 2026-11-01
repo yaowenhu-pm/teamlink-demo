@@ -25,19 +25,23 @@ function allItems(state) {
   const items = [];
   while (true) {
     const view = state.view();
-    assert.ok(view.items.length + view.footer.length <= 8, 'every screen has at most eight buttons');
+    assert.ok(view.items.length + view.footer.length <= 8, 'content and navigation stay bounded');
+    assert.equal(view.modeItems.length, 2, 'both selection modes are available on every page');
+    assert.ok(view.modeItems.length + view.items.length + view.footer.length <= 10, 'fixed controls do not crowd the menu');
     items.push(...view.items);
     if (!view.footer.some(item => item.key === 'nav:next')) return items;
     state.activate('nav:next');
   }
 }
 
-test('all categories and automatic picking are reachable by paginated navigation', () => {
+test('all categories are paginated while both selection modes remain fixed', () => {
   const state = createGestureMenuState();
   state.open({targets, selectedId: 'auto', scene: {trees: 3}});
   assert.deepEqual(allItems(state).map(item => item.id), ['sun', 'tree', 'mountain', 'boat', 'bird',
-    'flower', 'cloud', 'leaf', 'environment', 'layers', 'actions', 'auto']);
-  assert.deepEqual(state.activate('select:auto'), {type: 'select', id: 'auto'});
+    'flower', 'cloud', 'leaf', 'environment', 'layers', 'actions']);
+  assert.deepEqual(state.activate('mode:auto'), {type: 'mode', id: 'auto'});
+  assert.deepEqual(state.activate('mode:manual'), {type: 'mode', id: 'manual'});
+  assert.equal(state.activate('select:auto'), null);
   assert.equal(state.activate('not-a-key'), null);
 });
 
@@ -177,18 +181,18 @@ test('mounted menu supports client-pixel dwell navigation and closes before sele
   ui.menu.open({targets}); ui.layout();
   assert.equal(ui.root.hidden, false);
   assert.equal(ui.root.attributes.role, 'dialog');
-  const cursor = {x: 30, y: 90}; // second row: tree category
+  const cursor = {x: 30, y: 210}; // after the two fixed modes: tree category
   for (let timestampMs = 0; timestampMs <= 500; timestampMs += 125) ui.menu.update(cursor, timestampMs, {enabled: true});
   ui.layout();
   assert.match(ui.root.children[0].textContent, /^树/u);
   assert.equal(ui.menu.isOpen(), true);
-  const target = ui.buttons()[0];
-  assert.equal(target.dataset.menuKey, 'target:tree:0');
-  ui.menu.update({x: 30, y: 30}, 625);
-  ui.menu.update({x: 30, y: 30}, 750);
+  const target = ui.buttons().find(button => button.dataset.menuKey === 'target:tree:0');
+  assert.ok(target);
+  ui.menu.update({x: 30, y: 150}, 625);
+  ui.menu.update({x: 30, y: 150}, 750);
   assert.equal(target.dataset.dwell, '0.25');
   assert.equal(target.style['--dwell'], '0.25');
-  for (const timestampMs of [875, 1000, 1125]) ui.menu.update({x: 30, y: 30}, timestampMs);
+  for (const timestampMs of [875, 1000, 1125]) ui.menu.update({x: 30, y: 150}, timestampMs);
   assert.deepEqual(selected, ['tree:0']);
   assert.equal(ui.root.hidden, true);
   assert.equal(target.dataset.dwell, '0');
@@ -197,7 +201,7 @@ test('mounted menu supports client-pixel dwell navigation and closes before sele
 test('gesture category navigation locks the old physical slot until an enabled cursor leaves', () => {
   const selected = [], ui = fixture({onSelect: id => selected.push(id)});
   ui.menu.open({targets}); ui.layout();
-  const cursor = {x: 30, y: 90}; // tree category becomes tree:1 in this slot
+  const cursor = {x: 30, y: 210}; // tree category becomes tree:1 in this slot
   for (const timestampMs of [0, 125, 250, 375, 500]) ui.menu.update(cursor, timestampMs);
   ui.layout();
   const originalTitle = ui.root.children[0].textContent;
@@ -207,10 +211,10 @@ test('gesture category navigation locks the old physical slot until an enabled c
   }
   ui.menu.resetDwell();
   ui.menu.update(cursor, 4000); // a frame gap cannot clear the physical lock
-  ui.menu.update({x: 300, y: 90}, 4125, {enabled: false}); // disabled motion is not an observed exit
+  ui.menu.update({x: 300, y: 210}, 4125, {enabled: false}); // disabled motion is not an observed exit
   ui.menu.update(null, 4250); // loss is not an observed exit either
-  ui.menu.update({x: 300, y: 90}, NaN);
-  ui.menu.update({x: 300, y: 90}, 1000); // regressed time cannot unlock it
+  ui.menu.update({x: 300, y: 210}, NaN);
+  ui.menu.update({x: 300, y: 210}, 1000); // regressed time cannot unlock it
   ui.menu.updateTargets(targets.map(target => ({...target, label: `${target.label} updated`})));
   ui.layout();
   for (const timestampMs of [4375, 4500, 4625, 4750, 4875]) {
@@ -219,7 +223,7 @@ test('gesture category navigation locks the old physical slot until an enabled c
   assert.deepEqual(selected, []);
   assert.equal(ui.menu.isOpen(), true);
   assert.equal(ui.root.children[0].textContent, originalTitle);
-  ui.menu.update({x: 300, y: 90}, 5000); // valid exit releases the old rectangle
+  ui.menu.update({x: 300, y: 210}, 5000); // valid exit releases the old rectangle
   for (const timestampMs of [5125, 5250, 5375, 5500, 5625]) ui.menu.update(cursor, timestampMs);
   assert.deepEqual(selected, ['tree:1']);
   assert.equal(ui.menu.isOpen(), false);
@@ -245,7 +249,7 @@ test('gesture pagination cannot bounce or skip pages while the cursor stays in i
 
 test('closing and reopening clears the navigation region lock', () => {
   const ui = fixture(); ui.menu.open({targets}); ui.layout();
-  const cursor = {x: 30, y: 90};
+  const cursor = {x: 30, y: 210};
   for (const timestampMs of [0, 125, 250, 375, 500]) ui.menu.update(cursor, timestampMs);
   ui.layout(); assert.match(ui.root.children[0].textContent, /^树/u);
   ui.menu.close(); ui.menu.open({targets}); ui.layout();
@@ -259,12 +263,12 @@ function contains(rect, cursor) {
 
 test('opening or disabling does not immediately activate; unchanged target updates preserve dwell', () => {
   const ui = fixture(); ui.menu.open({targets}); ui.layout();
-  const first = ui.buttons()[0], cursor = {x: 30, y: 30};
+  const first = ui.buttons().find(button => button.dataset.menuKey === 'category:sun'), cursor = {x: 30, y: 150};
   assert.equal(ui.menu.update(cursor, 10000, {enabled: false}).progress, 0);
   assert.equal(ui.menu.update(cursor, 10125).progress, 0);
   ui.menu.update(cursor, 10250);
   ui.menu.updateTargets(targets.map(target => ({...target, bounds: {left: 0}})));
-  assert.equal(ui.buttons()[0], first, 'geometry-only inventory changes do not replace menu buttons');
+  assert.equal(ui.buttons().find(button => button.dataset.menuKey === 'category:sun'), first, 'geometry-only inventory changes do not replace menu buttons');
   assert.equal(ui.menu.update(cursor, 10375).progress, .5);
   ui.menu.resetDwell();
   assert.equal(first.dataset.dwell, '0');
@@ -276,12 +280,13 @@ test('opening or disabling does not immediately activate; unchanged target updat
 });
 
 test('mouse selection and actions match gesture behavior, with safe external text rendering', () => {
-  const selected = [], actions = [], label = '<img src=x onerror=alert(1)>';
-  const ui = fixture({onSelect: id => selected.push(id), onAction: id => actions.push(id)});
+  const selected = [], actions = [], modes = [], label = '<img src=x onerror=alert(1)>';
+  const ui = fixture({onSelect: id => selected.push(id), onAction: id => actions.push(id), onModeChange: id => modes.push(id)});
   ui.menu.open({targets: [{id: 'tree:0', kind: 'tree', label}]}); ui.layout();
   ui.click('category:tree');
-  assert.equal(ui.buttons()[0].textContent, label);
-  assert.equal(ui.buttons()[0].attributes['aria-label'], label);
+  const treeButton = ui.buttons().find(button => button.dataset.menuKey === 'target:tree:0');
+  assert.equal(treeButton.textContent, label);
+  assert.equal(treeButton.attributes['aria-label'], label);
   ui.click('target:tree:0');
   assert.deepEqual(selected, ['tree:0']); assert.equal(ui.menu.isOpen(), false);
   ui.menu.open({targets}); ui.layout();
@@ -289,9 +294,89 @@ test('mouse selection and actions match gesture behavior, with safe external tex
   ui.click('action:undo');
   assert.deepEqual(actions, ['undo']); assert.equal(ui.menu.isOpen(), false);
   ui.menu.open({targets}); ui.layout();
-  ui.click('nav:next'); ui.click('nav:next'); ui.click('select:auto');
-  assert.deepEqual(selected, ['tree:0', 'auto']);
+  ui.click('nav:next'); ui.click('nav:next'); ui.click('mode:auto');
+  assert.deepEqual(selected, ['tree:0']);
+  assert.deepEqual(modes, ['auto']);
+  assert.equal(ui.menu.isOpen(), true, 'mode callbacks own whether the picker stays open');
   ui.menu.open({targets}); ui.layout(); ui.click('action:close');
   assert.deepEqual(actions, ['undo', 'close']);
   assert.throws(() => mountGestureMenu({}), TypeError);
+});
+
+test('fixed mode controls remain on every page and updating them preserves object navigation', () => {
+  const state = createGestureMenuState(); state.open({targets, selectionMode: 'auto'});
+  for (const kind of ['sun', 'tree', 'mountain', 'boat', 'bird', 'flower', 'cloud', 'leaf', 'environment', 'layers', 'actions']) {
+    category(state, kind);
+    while (true) {
+      const view = state.view();
+      assert.deepEqual(view.modeItems.map(item => [item.key, item.type]), [['mode:auto', 'mode'], ['mode:manual', 'mode']]);
+      assert.equal(view.modeItems.find(item => item.id === 'auto').selected, true);
+      if (!view.footer.some(item => item.id === 'next')) break;
+      state.activate('nav:next');
+    }
+  }
+  category(state, 'tree'); state.activate('nav:next'); state.activate('nav:next');
+  const before = state.view();
+  const manual = state.updateMode('manual', 'tree:10');
+  assert.equal(manual.category, before.category); assert.equal(manual.page, before.page);
+  assert.equal(manual.selectionMode, 'manual');
+  assert.equal(manual.modeItems.find(item => item.id === 'manual').selected, true);
+  assert.equal(manual.items.find(item => item.id === 'tree:10').selected, true);
+  const automatic = state.updateMode('auto', null);
+  assert.equal(automatic.page, before.page);
+  assert.equal(automatic.items.some(item => item.selected), false);
+  assert.throws(() => state.updateMode('unknown'), RangeError);
+  assert.throws(() => state.updateMode('manual', {}), TypeError);
+  assert.deepEqual(state.view(), automatic, 'invalid mode state is atomic');
+  state.open({targets, selectedId: 'boat:0'});
+  assert.equal(state.view().selectionMode, 'manual', 'legacy explicit selection infers manual mode');
+  state.open({targets, selectedId: 'boat:0', selectionMode: 'auto'});
+  assert.equal(state.view().selectionMode, 'auto', 'explicit mode overrides inference');
+});
+
+test('mounted mode buttons use the same callback for mouse and dwell without closing the picker', () => {
+  const modes = [];
+  const ui = fixture({onModeChange: mode => {
+    assert.equal(ui.menu.isOpen(), true);
+    modes.push(mode); ui.menu.updateMode(mode, mode === 'manual' ? 'tree:0' : null); ui.layout();
+  }});
+  ui.menu.open({targets, selectionMode: 'auto'}); ui.layout();
+  assert.equal(ui.root.children[1].className, 'gesture-mode-switch');
+  assert.equal(ui.root.children[1].attributes.role, 'group');
+  assert.equal(ui.root.children[1].attributes['aria-label'], '选择方式');
+  ui.click('category:tree'); ui.click('nav:next');
+  const title = ui.root.children[0].textContent;
+  ui.click('mode:manual');
+  assert.equal(ui.menu.isOpen(), true); assert.equal(ui.root.children[0].textContent, title);
+  assert.equal(ui.buttons().find(button => button.dataset.menuKey === 'mode:manual').attributes['aria-pressed'], 'true');
+  assert.equal(ui.buttons().find(button => button.dataset.menuKey === 'mode:auto').attributes['aria-pressed'], 'false');
+  const auto = ui.buttons().find(button => button.dataset.menuKey === 'mode:auto');
+  const cursor = {x: auto.rect.left + 5, y: auto.rect.top + 5};
+  for (const timestampMs of [0, 125, 250, 375, 500]) ui.menu.update(cursor, timestampMs);
+  assert.deepEqual(modes, ['manual', 'auto']);
+  assert.equal(ui.menu.isOpen(), true); assert.equal(ui.root.children[0].textContent, title);
+});
+
+test('a held mode button cannot repeat after its callback rebuilds the selected mode', () => {
+  const modes = [], selected = [];
+  const ui = fixture({onSelect: id => selected.push(id), onModeChange: mode => {
+    modes.push(mode); ui.menu.updateMode(mode, mode === 'manual' ? 'tree:0' : null); ui.layout();
+  }});
+  ui.menu.open({targets, selectionMode: 'auto'}); ui.layout();
+  const manual = ui.buttons().find(button => button.dataset.menuKey === 'mode:manual');
+  const cursor = {x: manual.rect.left + 5, y: manual.rect.top + 5};
+  for (const timestampMs of [0, 125, 250, 375, 500]) ui.menu.update(cursor, timestampMs);
+  assert.deepEqual(modes, ['manual']);
+  for (const timestampMs of [625, 750, 875, 1000, 1125]) assert.equal(ui.menu.update(cursor, timestampMs).triggered, false);
+  ui.menu.resetDwell();
+  ui.menu.update({x: 300, y: cursor.y}, 3000, {enabled: false});
+  ui.menu.update(null, 3125);
+  for (const timestampMs of [3250, 3375, 3500, 3625, 3750]) assert.equal(ui.menu.update(cursor, timestampMs).triggered, false);
+  assert.deepEqual(modes, ['manual']); assert.deepEqual(selected, []);
+  ui.menu.update({x: 300, y: cursor.y}, 3875);
+  const auto = ui.buttons().find(button => button.dataset.menuKey === 'mode:auto');
+  const next = {x: auto.rect.left + 5, y: auto.rect.top + 5};
+  for (const timestampMs of [4000, 4125, 4250, 4375, 4500]) ui.menu.update(next, timestampMs);
+  assert.deepEqual(modes, ['manual', 'auto']);
+  assert.equal(ui.menu.isOpen(), true);
 });

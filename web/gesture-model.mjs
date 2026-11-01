@@ -179,7 +179,7 @@ export class GestureTargetTracker {
 // Geometry is independent of screen orientation and hand size. A conservative
 // V requires two straight, separated fingers and two visibly curled fingers;
 // ambiguous foreshortened hands simply do not activate the selector.
-const selectorPose = (landmarks, distance, palmWidth) => {
+const selectorPose = (landmarks, distance, palmWidth, kind) => {
   const vector = (a, b) => ({x: b.x - a.x, y: b.y - a.y});
   const aligned = (a, b, c) => {
     const u = vector(a, b), v = vector(b, c);
@@ -199,28 +199,35 @@ const selectorPose = (landmarks, distance, palmWidth) => {
         && tipFromWrist <= pipFromWrist + palmWidth * .15,
     };
   };
-  return finger(5, 6, 7, 8).straight && finger(9, 10, 11, 12).straight
-    && finger(13, 14, 15, 16).curled && finger(17, 18, 19, 20).curled
+  const common = finger(5, 6, 7, 8).straight && finger(9, 10, 11, 12).straight
+    && finger(17, 18, 19, 20).curled
     && distance(landmarks[8], landmarks[12]) >= palmWidth * .55
     && distance(landmarks[4], landmarks[8]) >= palmWidth * .6;
+  if (!common) return false;
+  if (kind === 'three') return finger(13, 14, 15, 16).straight
+    && distance(landmarks[12], landmarks[16]) >= palmWidth * .4
+    && distance(landmarks[8], landmarks[16]) >= palmWidth * .8;
+  return finger(13, 14, 15, 16).curled;
 };
 
 /**
- * Hold a V for holdMs to open the target selector once. Input matches
+ * Shared timer for the built-in V and three-finger poses. Input matches
  * PinchTracker's frame, with optional pinching:boolean from that tracker.
- * Initial appearance and tracking loss require a valid non-V release before
+ * Initial appearance and tracking loss require a valid non-matching release before
  * arming. A held pose cannot repeat; releaseMs and cooldownMs must both pass.
  * A pinch suppresses recognition and discards the pending hold. This tracker
  * never changes PinchTracker's state or treats a lost hand as a release.
  */
-export class SelectorGestureTracker {
+class HeldGestureTracker {
+  #poseKind;
   constructor({holdMs = 500, releaseMs = 160, cooldownMs = 700, maxGapMs = 250,
-    minConfidence = .65, minPalmSize = .025} = {}) {
+    minConfidence = .65, minPalmSize = .025} = {}, poseKind) {
     if (![holdMs, releaseMs, cooldownMs, maxGapMs, minConfidence, minPalmSize].every(Number.isFinite)
       || holdMs <= 0 || releaseMs <= 0 || cooldownMs < 0 || maxGapMs <= 0
       || minConfidence < 0 || minConfidence > 1 || minPalmSize <= 0 || minPalmSize > 1) {
       throw new RangeError('Invalid selector gesture options');
     }
+    this.#poseKind = poseKind;
     this.options = {holdMs, releaseMs, cooldownMs, maxGapMs, minConfidence, minPalmSize};
     this.lastTriggeredAt = null;
     this.cancel();
@@ -261,7 +268,7 @@ export class SelectorGestureTracker {
       this.releaseSince = null;
       return {phase: 'idle', triggered: false, progress: 0, ready: false, pose: false, reason: 'pinching'};
     }
-    const pose = selectorPose(corrected, distance, palmWidth);
+    const pose = selectorPose(corrected, distance, palmWidth, this.#poseKind);
     if (!pose) {
       this.holdSince = null;
       if (this.releaseSince === null) this.releaseSince = timestampMs;
@@ -291,6 +298,21 @@ export class SelectorGestureTracker {
     this.releaseSince = null;
     return {phase: 'lost', triggered: false, progress: 0, ready: false, pose: false, reason};
   }
+}
+
+/** V gesture: the existing selector timing and result contract. */
+export class SelectorGestureTracker extends HeldGestureTracker {
+  constructor(options = {}) { super(options, 'v'); }
+}
+
+/**
+ * Three separated, straight fingers (index, middle, ring), curled little finger,
+ * and thumb away from the index tip. Holds for 650ms to request a mode change.
+ * Shares the selector's release, cooldown, confidence and cancellation contract;
+ * it does not choose a scene mode or modify the pinch tracker itself.
+ */
+export class ModeGestureTracker extends HeldGestureTracker {
+  constructor({holdMs = 650, ...options} = {}) { super({holdMs, ...options}, 'three'); }
 }
 
 /** Relative hour dragging preserves the initial cursor-to-sun grab offset. */

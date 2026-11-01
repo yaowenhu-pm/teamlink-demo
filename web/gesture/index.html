@@ -7,7 +7,7 @@
   <meta name="referrer" content="no-referrer">
   <title>TeamLink · 伸手，改变风景。</title>
   <link rel="icon" href="/assets/teamlink-icon.png">
-  <link rel="stylesheet" href="/gesture/gesture.css?v=82c7cd7c2e07">
+  <link rel="stylesheet" href="/gesture/gesture.css?v=49853b79c1bc">
 </head>
 <body>
   <main id="gesture-stage" aria-label="本机摄像头手势实验">
@@ -24,12 +24,12 @@
     <div class="intro">
       <p class="eyebrow">A small experiment. Just for play.</p>
       <h1>伸手，<br>改变风景。</h1>
-      <p>抬手靠近物体，捏合拇指和食指移动。<br>比个 V，换一个对象，让想法在眼前发生。</p>
+      <p>抬手靠近物体，捏合拇指和食指移动。<br>三指切换自动／手动，V 手势选择对象。</p>
     </div>
     <div id="target-highlight" class="target-highlight" hidden aria-hidden="true"><span></span></div>
     <section id="gesture-menu" class="gesture-menu" hidden aria-label="用手势选择风景中的对象"></section>
     <button id="exit-immersive" class="exit-immersive" type="button" aria-label="退出沉浸画布">↙ 返回</button>
-    <div class="gesture-legend"><span id="selector-hint">V 手势选对象</span><progress id="selector-progress" max="1" value="0" aria-label="V 手势保持进度"></progress><span>捏合移动 · 松开保存</span></div>
+    <div class="gesture-legend"><button id="toggle-mode" type="button" class="selection-mode-badge" aria-pressed="false" title="三指保持约0.6秒切换自动/手动（T）"><span id="selection-mode-label">自动拾取</span></button><span class="mode-gesture"><span id="mode-hint">三指切模式</span><progress id="mode-progress" max="1" value="0" aria-label="三指模式切换进度"></progress></span><span class="object-gesture"><span id="selector-hint">V 选对象</span><progress id="selector-progress" max="1" value="0" aria-label="V 手势保持进度"></progress></span></div>
     <div id="hand-cursor" class="hand-cursor" hidden aria-hidden="true"><span></span></div>
     <aside id="camera-preview" class="camera-preview" hidden aria-label="仅在本机处理的摄像头预览">
       <video id="camera-video" autoplay muted playsinline></video>
@@ -39,7 +39,7 @@
     </aside>
     <section class="experiment-panel" aria-label="开启手势实验">
       <div class="panel-status"><span id="state-dot" class="state-dot"></span><p id="gesture-status" role="status" aria-live="polite">开启摄像头，让整幅风景跟着你的手。</p><output id="hour-label" aria-label="当前时间">18:18</output></div>
-      <div class="target-controls"><div class="target-summary"><span id="target-mode">自动拾取</span><strong id="current-target">抬手，靠近一个物体</strong></div><div class="target-buttons"><button id="auto-target" type="button" title="返回自动拾取（A）">自动</button><button id="open-targets" type="button" title="打开对象菜单（V 或 V 手势）">选择对象 <span aria-hidden="true">✌</span></button></div></div>
+      <div class="target-controls"><div class="target-summary"><span id="target-mode">自动拾取</span><strong id="current-target">抬手，靠近一个物体</strong></div><div class="target-buttons"><button id="auto-target" type="button" title="返回自动拾取（三指切换，或 A）">自动</button><button id="open-targets" type="button" title="打开对象菜单（V 或 V 手势）">选择对象 <span aria-hidden="true">✌</span></button></div></div>
       <div id="loading-progress" class="loading-progress" hidden>
         <progress id="loading-meter" max="100" value="0" aria-label="识别文件下载进度"></progress>
         <span id="loading-detail">准备下载…</span>
@@ -47,13 +47,13 @@
       <div class="panel-actions">
         <button id="start-camera" class="primary" type="button">开启摄像头 <span aria-hidden="true">↗</span></button>
         <button id="stop-camera" class="secondary" type="button" hidden>关闭摄像头</button>
-        <label class="hour-control"><span>鼠标直接拖动 · V 菜单 · A 自动 · L 画线</span><input id="hour-control" type="range" min="0" max="24" step="0.1" value="18.3" aria-label="手动调整太阳和时间"></label>
+        <label class="hour-control"><span>三指切模式 · V 选对象 · T 切模式 · L 画线</span><input id="hour-control" type="range" min="0" max="24" step="0.1" value="18.3" aria-label="手动调整太阳和时间"></label>
       </div>
       <p id="camera-note" class="panel-note">首次可能下载约 10 MB；以后优先读取本机缓存。每次仍需启动识别，准备好后再请求相机权限。</p>
       <p class="panel-footnote"><span id="asset-cache-state" class="cache-state">首次准备后可复用缓存</span> · 本页是独立本机实验，不改动共享房间。<a href="/">回到共同创作 ↗</a></p>
     </section>
   </main>
   <noscript>请开启 JavaScript 后体验；摄像头只在你主动点击后开启。</noscript>
-  <script type="module" src="/gesture/gesture.mjs?v=dbf2a9c183e1"></script>
+  <script type="module" src="/gesture/gesture.mjs?v=87d4699716d1"></script>
 </body>
 </html>

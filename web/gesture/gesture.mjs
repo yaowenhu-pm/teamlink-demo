@@ -1,16 +1,17 @@
 import {createScene, updateScene, sceneChanges, moveSceneObject} from '../scene-model.mjs';
 import {mountLandscape} from '../scene-renderer.mjs';
 import {mountLandscapeMusic} from '../music.mjs';
-import {PinchTracker, GestureTargetTracker, SelectorGestureTracker} from '../gesture-model.mjs?v=a7086b54c0c6';
+import {PinchTracker, GestureTargetTracker, SelectorGestureTracker, ModeGestureTracker} from '../gesture-model.mjs?v=d83ab1d088a4';
 import {buildGestureTargets, hitTestGestureTargets, applyTargetDrag, drawLeafTrailPatch} from '../gesture-targets.mjs?v=f8abf25eb931';
 import {mountGestureDecor, dragDecorOffset} from '../gesture-decor.mjs?v=f4f5c63fdcf3';
-import {mountGestureMenu} from '../gesture-menu.mjs?v=dc1f6a9279db';
+import {mountGestureMenu} from '../gesture-menu.mjs?v=f8384cc52e0c';
 
 const $ = selector => document.querySelector(selector);
 const stage = $('#gesture-stage'), video = $('#camera-video'), svg = $('#landscape');
 const reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
-const tracker = new PinchTracker(), selector = new SelectorGestureTracker(), targetTracker = new GestureTargetTracker();
+const tracker = new PinchTracker(), selector = new SelectorGestureTracker(), modeTracker = new ModeGestureTracker(), targetTracker = new GestureTargetTracker();
 let scene = createScene(), decorOffsets = Object.freeze({}), history = [], gestureBefore = null, pointerBefore = null;
+let selectionMode = 'auto', lastManualId = null;
 let labDefault = null, explicitId = null, activeTarget = null, grabStart = null, drawPoints = [], hoverId = null;
 let lastTargets = [], targetsAt = -Infinity, menuReleaseAt = null, motionPlaying = !reduced, lastAssets = null;
 let inputGeneration = 0, lastInputGeneration = -1, pointerSession = null;
@@ -32,7 +33,7 @@ function render() {
     showTrajectory: leafSelected, drawingTrajectory: explicitId === 'draw:leaf' && !gestureBefore});
   decor.apply(decorOffsets);
   stage.classList.toggle('night', scene.hour < 6 || scene.hour >= 19.5);
-  stage.dataset.hour = String(scene.hour); stage.dataset.gestureTarget = explicitId ?? 'auto';
+  stage.dataset.hour = String(scene.hour); stage.dataset.selectionMode = selectionMode; stage.dataset.gestureTarget = explicitId ?? (selectionMode === 'manual' ? 'manual:none' : 'auto');
   stage.dataset.activeTarget = activeTarget?.id ?? hoverId ?? explicitId ?? '';
   stage.dataset.decorOffsets = JSON.stringify(decorOffsets);
   stage.dataset.historyCount = String(history.length);
@@ -42,8 +43,11 @@ function render() {
   $('#hour-label').textContent = formatHour(scene.hour);
   if ($('#hour-control') !== document.activeElement) $('#hour-control').value = String(scene.hour);
   $('#undo-lab').disabled = !history.length;
-  $('#target-mode').textContent = explicitId === 'draw:leaf' ? '画落叶路线' : explicitId ? '固定对象' : '自动拾取';
-  $('#current-target').textContent = activeTarget?.label ?? lastTargets.find(t => t.id === (explicitId ?? hoverId))?.label ?? (explicitId === 'draw:leaf' ? '捏合画线 · 松开保存' : '抬手，靠近一个物体');
+  const modeLabel=selectionMode==='manual'?'手动选择':'自动拾取';
+  $('#target-mode').textContent=modeLabel;$('#selection-mode-label').textContent=modeLabel;
+  $('#toggle-mode').setAttribute('aria-pressed',String(selectionMode==='manual'));
+  $('#toggle-mode').setAttribute('aria-label',`${modeLabel}，切换到${selectionMode==='manual'?'自动拾取':'手动选择'}`);
+  $('#current-target').textContent = activeTarget?.label ?? lastTargets.find(t => t.id === (explicitId ?? hoverId))?.label ?? (explicitId === 'draw:leaf' ? '捏合画线 · 松开保存' : selectionMode==='manual'?'请用 V 菜单选择对象':'抬手，靠近一个物体');
   updateHighlight();
 }
 function commit(before) {
@@ -106,7 +110,7 @@ stage.addEventListener('keydown',event=>{
 },{capture:true});
 function cancelGesture(message = '') {
   restore(gestureBefore); gestureBefore = null; activeTarget = null; grabStart = null; drawPoints = [];
-  tracker.cancel('cancelled'); selector.cancel(); targetTracker.cancel(); hoverId = null;
+  tracker.cancel('cancelled'); selector.cancel(); modeTracker.cancel(); targetTracker.cancel(); hoverId = null;
   stage.classList.remove('gesture-grabbing'); $('#hand-cursor').hidden = true;
   clearHandFeedback();
   if (message) status(message);
@@ -120,7 +124,7 @@ const renderer = mountLandscape(svg, {
     if (phase === 'end') { const before = pointerBefore; pointerBefore = null; pointerSession = null; commit(before); }
   },
   onObjectSelect({id}) {
-    if(pointerBefore)return;cancelGesture();explicitId=id;selectedObject=id;menu.close();stage.classList.remove('menu-open');collectTargets(true);render();
+    if(pointerBefore)return;cancelGesture();selectionMode='manual';lastManualId=id;explicitId=id;selectedObject=id;menu.close();stage.classList.remove('menu-open');collectTargets(true);render();
   },
   onObjectDrag({id, point, phase}) {
     if (phase === 'start' && !beginPointer('object',id)) return false;
@@ -147,7 +151,7 @@ const renderer = mountLandscape(svg, {
   }
 });
 const decor = mountGestureDecor(svg), music = mountLandscapeMusic(stage);
-const menu = mountGestureMenu($('#gesture-menu'), {onSelect:setTarget,onAction:menuAction});
+const menu = mountGestureMenu($('#gesture-menu'), {onSelect:setTarget,onAction:menuAction,onModeChange:next=>setSelectionMode(next,{fromMenu:true})});
 function updateCameraState(next) {
   cameraState = next; stage.dataset.cameraState = next;
   stage.classList.toggle('camera-running', next === 'tracking');
@@ -199,17 +203,50 @@ function updateHighlight() {
   box.hidden=false;box.style.left=b.left*100+'%';box.style.top=b.top*100+'%';box.style.width=(b.right-b.left)*100+'%';box.style.height=(b.bottom-b.top)*100+'%';
   box.querySelector('span').textContent=target.label;
 }
+function closeTargetMenu() {menu.close();stage.classList.remove('menu-open');menuReleaseAt=null;}
+function openTargetMenu(message='先张开手，再将光标停在按钮上选择。') {
+  menu.open({targets:collectTargets(true),selectedId:explicitId,scene,selectionMode});
+  stage.classList.add('menu-open');menuReleaseAt=null;status(message);render();
+}
+function availableTarget(id,targets) {return id==='draw:leaf'?scene.trees>0:targets.some(target=>target.id===id);}
+function setSelectionMode(next,{fromMenu=false}={}) {
+  if(!['auto','manual'].includes(next)||cameraState==='loading'||gestureBefore||pointerBefore||pointerHeld)return;
+  const targets=collectTargets(true),candidate=hoverId;
+  if(next===selectionMode){
+    if(next==='manual'&&!explicitId&&!menu.isOpen())openTargetMenu('手动选择：请在菜单中选一个对象。');
+    else if(next==='auto')closeTargetMenu();
+    if(menu.isOpen())menu.updateMode(next,explicitId);render();return;
+  }
+  if(explicitId&&availableTarget(explicitId,targets))lastManualId=explicitId;
+  const fixed=availableTarget(candidate,targets)?candidate:availableTarget(lastManualId,targets)?lastManualId:null;
+  cancelPointer();cancelGesture();selectionMode=next;
+  explicitId=next==='manual'?fixed:null;selectedObject=isObject(explicitId)?explicitId:null;
+  if(explicitId)lastManualId=explicitId;
+  if(next==='auto'){
+    closeTargetMenu();status('已切到自动拾取：靠近哪个物体，就能捏合抓取哪个。');
+  }else if(fromMenu&&menu.isOpen()){
+    menu.updateMode(next,explicitId);menuReleaseAt=null;
+    status(explicitId?'已切到手动选择，可以在菜单中更换固定对象。':'已切到手动选择，请在菜单中选一个对象。');
+  }else if(explicitId){
+    closeTargetMenu();status(`已切到手动选择：${targets.find(t=>t.id===explicitId)?.label??'落叶路线'}已固定，V 手势可换对象。`);
+  }else if(menu.isOpen()){
+    menu.updateMode(next,null);menuReleaseAt=null;status('已切到手动选择，请在菜单中选一个对象。');
+  }else openTargetMenu('已切到手动选择，请在菜单中选一个对象。');
+  render();
+}
+function toggleSelectionMode() {setSelectionMode(selectionMode==='auto'?'manual':'auto');}
 function setTarget(id) {
-  if (cameraState === 'loading') return;
-  cancelPointer();cancelGesture(); explicitId=id==='auto'?null:id;
+  if(cameraState==='loading')return;
+  if(id==='auto'){setSelectionMode('auto');return;}
+  if(id==='manual'){setSelectionMode('manual',{fromMenu:menu.isOpen()});return;}
+  cancelPointer();cancelGesture();selectionMode='manual';lastManualId=id;explicitId=id;
   selectedObject=isObject(explicitId)?explicitId:null;
-  menu.close();stage.classList.remove('menu-open');menuReleaseAt=null;collectTargets(true);render();
-  status(explicitId ? `${lastTargets.find(t=>t.id===explicitId)?.label ?? '落叶路线'}：${lastTargets.find(t=>t.id===explicitId)?.instruction ?? '捏合画线，松开保存。'}` : '自动拾取：抬手靠近物体，捏合抓取。V 手势可以选更多内容。');
+  closeTargetMenu();collectTargets(true);render();
+  status(`${lastTargets.find(t=>t.id===explicitId)?.label??'落叶路线'}已固定：${lastTargets.find(t=>t.id===explicitId)?.instruction??'捏合画线，松开保存。'} 三指保持可回到自动拾取。`);
 }
 function toggleMenu() {
   const wasOpen=menu.isOpen();cancelPointer();cancelGesture();
-  if (wasOpen) {menu.close();stage.classList.remove('menu-open');}
-  else {menu.open({targets:collectTargets(true),selectedId:explicitId,scene});stage.classList.add('menu-open');menuReleaseAt=null;status('先放下 V 手势，再将光标停在按钮上选择。');}
+  if(wasOpen)closeTargetMenu();else openTargetMenu('先放下 V 手势，再将光标停在按钮上选择。');
 }
 function menuAction(id) {
   cancelPointer();menu.close();stage.classList.remove('menu-open');menuReleaseAt=null;
@@ -257,7 +294,7 @@ const handDots = Array.from({length:21}, (_,index) => {
 handOverlay.replaceChildren(handWire, ...handDots);
 const handEdges = [[0,1],[1,2],[2,3],[3,4],[0,5],[5,6],[6,7],[7,8],[5,9],[9,10],[10,11],[11,12],[9,13],[13,14],[14,15],[15,16],[13,17],[0,17],[17,18],[18,19],[19,20]];
 function clearHandFeedback() {
-  handOverlay.setAttribute('hidden',''); $('#pinch-feedback').value = 0; $('#hand-feedback-label').textContent = '等待手掌';
+  handOverlay.setAttribute('hidden',''); $('#pinch-feedback').value = 0;$('#mode-progress').value=0;$('#selector-progress').value=0;$('#mode-hint').textContent='三指切模式';$('#selector-hint').textContent='V 选对象'; $('#hand-feedback-label').textContent = '等待手掌';
 }
 function handFeedback(hand, frame) {
   if (!frame.cursor || !hand || hand.length !== 21) {
@@ -284,15 +321,18 @@ function waitForPreparation(promise, signal, timeoutMs = 30000, timeoutName = 'T
 function handleFrame(result, now) {
   const input={hands:result.landmarks??[],timestampMs:now,width:video.videoWidth,height:video.videoHeight,
     confidence:result.handedness?.[0]?.[0]?.score??1,handId:result.handedness?.[0]?.[0]?.categoryName??'single'};
-  const frame=tracker.update(input), select=selector.update({...input,pinching:frame.pinching});
-  stage.dataset.handPhase=frame.phase;stage.dataset.selectorPhase=select.phase;
+  const frame=tracker.update(input), mode=modeTracker.update({...input,pinching:frame.pinching});
+  const select=mode.pose?selector.cancel('mode-pose'):selector.update({...input,pinching:frame.pinching});
+  stage.dataset.handPhase=frame.phase;stage.dataset.selectorPhase=select.phase;stage.dataset.modeGesturePhase=mode.phase;
   handFeedback(result.landmarks?.[0],frame);
   const cursor=$('#hand-cursor');cursor.hidden=!frame.cursor;
   if (frame.cursor) {cursor.style.left=frame.cursor.x*100+'%';cursor.style.top=frame.cursor.y*100+'%';}
+  $('#mode-progress').value=mode.progress;$('#mode-hint').textContent=mode.pose?'保持三指 · 切换模式':'三指切模式';
   $('#selector-progress').value=select.progress; $('#selector-hint').textContent=select.pose ? '保持 V · 打开对象菜单' : 'V 手势选对象';
+  if(mode.triggered&&!gestureBefore&&!pointerHeld&&!pointerBefore){toggleSelectionMode();return;}
   if (select.triggered && !gestureBefore) {toggleMenu();return;}
   if (menu.isOpen()) {
-    if (!frame.cursor || select.pose || frame.pinching || !frame.ready) menuReleaseAt=null;
+    if (!frame.cursor || select.pose || mode.pose || frame.pinching || !frame.ready) menuReleaseAt=null;
     else if (menuReleaseAt===null) menuReleaseAt=now;
     const r=stage.getBoundingClientRect();
     menu.update(frame.cursor?{x:r.left+frame.cursor.x*r.width,y:r.top+frame.cursor.y*r.height}:null,now,
@@ -304,15 +344,16 @@ function handleFrame(result, now) {
     stage.classList.remove('gesture-grabbing');render();
     status(frame.reason==='multiple-hands'?'镜头里留一只手，就可以继续玩。':'先张开一只手，再捏合。');return;
   }
+  if(mode.pose&&!gestureBefore){status(`保持三指，切换到${selectionMode==='auto'?'手动选择':'自动拾取'}。`);return;}
   if (select.pose && !gestureBefore) {status('保持 V 手势，选择图中的更多内容。');return;}
   const targets=collectTargets();
   const bounds=stage.getBoundingClientRect();
   const overUI=frame.cursor&&document.elementFromPoint(bounds.left+frame.cursor.x*bounds.width,bounds.top+frame.cursor.y*bounds.height)?.closest('.experiment-panel,.lab-header,.camera-preview,.gesture-legend,#exit-immersive');
-  const hit=!explicitId&&overUI?null:explicitId==='draw:leaf'?{id:'draw:leaf',label:'落叶路线',operation:'draw'}:hitTestGestureTargets(targets,frame.cursor,{explicitId,slop:.009});
+  const hit=(selectionMode==='manual'&&!explicitId)||(selectionMode==='auto'&&overUI)?null:explicitId==='draw:leaf'?{id:'draw:leaf',label:'落叶路线',operation:'draw'}:hitTestGestureTargets(targets,frame.cursor,{explicitId,slop:.009});
   // An empty automatic hit must never grab a previously hovered object elsewhere.
   if (frame.phase==='start'&&!hit) targetTracker.cancel();
   const selection=targetTracker.update({timestampMs:now,targetId:hit?.id??null,phase:frame.phase});
-  hoverId=selection.targetId;
+  hoverId=selectionMode==='auto'?(hit?.id===selection.targetId?hit.id:null):selection.targetId;
   if (frame.phase==='start') {
     const chosen=selection.targetId==='draw:leaf'?hit:targets.find(t=>t.id===selection.targetId);
     if (!chosen) {status('靠近一个物体再捏合，或比 V 选择对象。');render();return;}
@@ -384,7 +425,7 @@ async function startCamera() {
     video.srcObject = stream; $('#camera-preview').hidden = false; $('#stop-camera').textContent = '关闭摄像头';
     await waitForPreparation(video.play(), controller.signal, 10000, 'CameraTimeoutError');
     if (session !== epoch) return;
-    loadController = null; tracker.cancel('start'); selector.cancel(); targetTracker.cancel(); lastVideoTime = -1; lastInference = 0;
+    loadController = null; tracker.cancel('start'); selector.cancel();modeTracker.cancel(); targetTracker.cancel(); lastVideoTime = -1; lastInference = 0;
     updateCameraState('tracking'); status('先张开一只手，再捏合。');
     $('#camera-note').textContent = (lastAssets?.total && lastAssets.cacheLoaded === lastAssets.total ? '本次读取本机缓存，没有重新下载模型。' : '识别文件已准备好，之后可复用浏览器缓存。') + ' V 手势选对象，捏合移动；松开保存，丢手取消。画面不上传。';
     inferenceFrame(session);
@@ -395,7 +436,7 @@ async function startCamera() {
 }
 function reset() {
   cancelPointer();cancelGesture();const before=snapshot();
-  scene=labDefault??createScene();decorOffsets=Object.freeze({});selectedObject=null;explicitId=null;
+  scene=labDefault??createScene();decorOffsets=Object.freeze({});selectedObject=null;explicitId=null;selectionMode='auto';lastManualId=null;
   motionTime=0;leafPhase=0;motionPlaying=!reduced;menu.close();stage.classList.remove('menu-open');commit(before);collectTargets(true);render();
   status('已恢复初始风景。抬手靠近物体，或比 V 切换对象。');
 }
@@ -412,6 +453,7 @@ $('#stop-camera').addEventListener('click',()=>{menu.close();stage.classList.rem
 $('#reset-lab').addEventListener('click',reset);$('#undo-lab').addEventListener('click',undo);
 $('#fullscreen-lab').addEventListener('click',fullscreen);$('#open-targets').addEventListener('click',toggleMenu);
 $('#auto-target').addEventListener('click',()=>setTarget('auto'));
+$('#toggle-mode').addEventListener('click',toggleSelectionMode);
 $('#exit-immersive').addEventListener('click',()=>{stage.classList.remove('immersive');status('已退出沉浸画布。');});
 $('#hour-control').addEventListener('input',event=>{
   if(lastInputGeneration!==inputGeneration)return;
@@ -425,7 +467,7 @@ document.addEventListener('keydown',event=>{
   const key=event.key.toLowerCase();
   if((event.metaKey||event.ctrlKey)&&key==='z'){event.preventDefault();undo();}
   else if(!event.metaKey&&!event.ctrlKey&&!event.altKey){
-    if(key==='r')reset();else if(key==='m')stage.querySelector('.music-toggle').click();else if(key==='f')fullscreen();
+    if(key==='t')toggleSelectionMode();else if(key==='r')reset();else if(key==='m')stage.querySelector('.music-toggle').click();else if(key==='f')fullscreen();
     else if(key==='v')toggleMenu();else if(key==='a')setTarget('auto');else if(key==='l')menuAction('draw:leaf');else if(key===' ') {event.preventDefault();menuAction('motion');}
     else if(key==='escape'){menu.close();stage.classList.remove('menu-open','immersive');cancelPointer();cancelGesture('已取消调整。');}
   }

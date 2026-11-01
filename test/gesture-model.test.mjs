@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {PinchTracker, GestureTargetTracker, SelectorGestureTracker, createHourDrag, createObjectDrag} from '../web/gesture-model.mjs';
+import {PinchTracker, GestureTargetTracker, SelectorGestureTracker, ModeGestureTracker, createHourDrag, createObjectDrag} from '../web/gesture-model.mjs';
 
 function hand({x = .5, y = .5, ratio = .7, scale = 1} = {}) {
   const points = Array.from({length: 21}, () => ({x, y}));
@@ -225,7 +225,11 @@ function selectorHand({pose = 'v', angle = 0, scale = 1, mirror = false, aspect 
     [.56, .61], [.58, .48], [.6, .56], [.57, .61],
     [.63, .65], [.66, .55], [.67, .62], [.64, .67],
   ];
-  if (pose === 'open') {
+  if (pose === 'three') {
+    points[14] = [.58, .47]; points[15] = [.6, .37]; points[16] = [.62, .28];
+  } else if (pose === 'three-unseparated') {
+    points[14] = [.56, .46]; points[15] = [.55, .34]; points[16] = [.54, .23];
+  } else if (pose === 'open') {
     points[14] = [.58, .47]; points[15] = [.6, .37]; points[16] = [.62, .28];
     points[18] = [.67, .52]; points[19] = [.7, .43]; points[20] = [.73, .35];
   } else if (pose === 'fist') {
@@ -400,6 +404,129 @@ test('selector rejects malformed normalized landmarks, metadata, and timing', ()
   for (const options of [{holdMs: 0}, {holdMs: NaN}, {releaseMs: 0}, {cooldownMs: -1},
     {maxGapMs: 0}, {minConfidence: 1.1}, {minPalmSize: 0}]) {
     assert.throws(() => new SelectorGestureTracker(options), RangeError);
+  }
+});
+
+const modeFrame = (timestampMs, options = {}) => selectorFrame(timestampMs, {pose: 'three', ...options});
+const holdMode = (tracker, start = 176, options = {}) => {
+  let result;
+  for (let elapsed = 0; elapsed <= 650; elapsed += 130) result = tracker.update(modeFrame(start + elapsed, options));
+  return result;
+};
+
+test('three fingers require a neutral release and a full 650ms hold, then latch once', () => {
+  const tracker = new ModeGestureTracker();
+  assert.equal(tracker.options.holdMs, 650);
+  assert.equal(tracker.options.releaseMs, 160);
+  assert.equal(tracker.options.cooldownMs, 700);
+  assert.equal(tracker.options.maxGapMs, 250);
+  for (let timestampMs = 0; timestampMs <= 650; timestampMs += 130) {
+    const result = tracker.update(modeFrame(timestampMs));
+    assert.equal(result.triggered, false);
+    assert.equal(result.reason, 'release-to-arm');
+  }
+  assert.equal(armSelector(tracker, 666).ready, true);
+  const first = tracker.update(modeFrame(842));
+  assert.equal(first.phase, 'holding');
+  assert.equal(first.progress, 0);
+  near(tracker.update(modeFrame(972)).progress, .2);
+  for (const timestampMs of [1102, 1232, 1362]) tracker.update(modeFrame(timestampMs));
+  assert.equal(tracker.update(modeFrame(1491)).triggered, false);
+  const trigger = tracker.update(modeFrame(1492));
+  assert.deepEqual({phase:trigger.phase,triggered:trigger.triggered,progress:trigger.progress},
+    {phase:'trigger',triggered:true,progress:1});
+  for (let timestampMs = 1622; timestampMs <= 2922; timestampMs += 130) {
+    assert.equal(tracker.update(modeFrame(timestampMs)).triggered, false, 'holding cannot toggle repeatedly');
+  }
+});
+
+test('three-finger geometry survives rotation, mirrored video, scale and aspect correction', () => {
+  for (const options of [{}, {angle: Math.PI / 2}, {angle: Math.PI}, {angle: -Math.PI / 3},
+    {mirror:true}, {scale:.5}, {scale:1.4}, {aspect:2}, {aspect:.75,mirror:true}]) {
+    const tracker = new ModeGestureTracker();
+    armSelector(tracker);
+    assert.equal(holdMode(tracker,176,options).triggered,true,JSON.stringify(options));
+  }
+});
+
+test('V, open palm, point, fist, pinch and unseparated fingers never request a mode switch', () => {
+  for (const pose of ['v','open','point','fist','pinch','unseparated','three-unseparated']) {
+    const tracker = new ModeGestureTracker();armSelector(tracker);
+    const result=holdMode(tracker,176,{pose});
+    assert.equal(result.pose,false,pose);assert.equal(result.triggered,false,pose);
+  }
+  const v = new SelectorGestureTracker();armSelector(v);
+  assert.equal(holdSelector(v,176,{pose:'three'}).pose,false,'three fingers cannot open the V selector');
+  const three = selectorHand({pose:'three'}), pinch = new PinchTracker();
+  pinch.update({landmarks:selectorHand({pose:'open'}),width:800,height:800,timestampMs:0});
+  const frame=pinch.update({landmarks:three,width:800,height:800,timestampMs:160});
+  assert.equal(frame.pinching,false,'the mode pose does not start a pinch');
+  assert.equal(frame.phase,'hover');
+});
+
+test('three-finger interruptions restart the hold and short neutral flickers do not rearm it', () => {
+  const tracker = new ModeGestureTracker();armSelector(tracker);
+  tracker.update(modeFrame(176));tracker.update(modeFrame(306));
+  tracker.update(selectorFrame(436,{pose:'open'}));
+  assert.equal(tracker.update(modeFrame(452)).progress,0);
+  for (const time of [582,712,842,972])tracker.update(modeFrame(time));
+  assert.equal(tracker.update(modeFrame(1101)).triggered,false);
+  assert.equal(tracker.update(modeFrame(1102)).triggered,true);
+  tracker.update(selectorFrame(1118,{pose:'open'}));tracker.update(selectorFrame(1270,{pose:'open'}));
+  assert.equal(tracker.update(modeFrame(1286)).ready,false);
+  armSelector(tracker,1302);
+  assert.equal(holdMode(tracker,1478).triggered,true);
+});
+
+test('mode cooldown survives cancellation and a release alone cannot bypass it', () => {
+  const tracker = new ModeGestureTracker({holdMs:100,cooldownMs:1000});armSelector(tracker);
+  tracker.update(modeFrame(176));assert.equal(tracker.update(modeFrame(276)).triggered,true);
+  tracker.cancel('no-hand');armSelector(tracker,292);
+  tracker.update(modeFrame(468));
+  assert.equal(tracker.update(modeFrame(568)).reason,'cooldown');
+  for (const time of [698,828,958,1088,1218])tracker.update(modeFrame(time));
+  assert.equal(tracker.update(modeFrame(1275)).triggered,false);
+  assert.equal(tracker.update(modeFrame(1276)).triggered,true);
+});
+
+test('pinching discards the mode hold and requires a fresh neutral release', () => {
+  const tracker=new ModeGestureTracker();armSelector(tracker);
+  tracker.update(modeFrame(176));tracker.update(modeFrame(306));
+  const result=tracker.update({...modeFrame(436),pinching:true});
+  assert.equal(result.reason,'pinching');assert.equal(result.ready,false);assert.equal(result.progress,0);
+  assert.equal(holdMode(tracker,566).triggered,false);
+  armSelector(tracker,1232);assert.equal(holdMode(tracker,1408).triggered,true);
+});
+
+test('lost, multiple, changed, low-confidence, repeated and stale frames cancel mode holds', () => {
+  for (const interrupt of [
+    {...modeFrame(320),hands:[]}, {...modeFrame(320),hands:[selectorHand({pose:'three'}),selectorHand({pose:'three'})]},
+    {...modeFrame(320),confidence:.64}, {...modeFrame(320),handId:'other'},
+    modeFrame(176), modeFrame(600),
+  ]) {
+    const tracker=new ModeGestureTracker();armSelector(tracker);
+    tracker.update(modeFrame(176));tracker.update(modeFrame(301));
+    const result=tracker.update(interrupt);
+    assert.equal(result.phase,'lost');assert.equal(result.triggered,false);assert.equal(result.progress,0);
+    assert.equal(tracker.update(modeFrame(700)).phase,'held');
+    assert.equal(holdMode(tracker,830).triggered,false);
+    armSelector(tracker,1496);assert.equal(holdMode(tracker,1672).triggered,true);
+  }
+  const tracker=new ModeGestureTracker();armSelector(tracker);tracker.update(modeFrame(176));
+  const cancelled=tracker.cancel('ui-mode-change');
+  assert.equal(cancelled.phase,'lost');assert.equal(cancelled.reason,'ui-mode-change');
+  assert.equal(holdMode(tracker,306).triggered,false);
+});
+
+test('mode gesture inherits strict frame and timing validation', () => {
+  const bad=selectorHand({pose:'three'});bad[16].x=NaN;
+  for (const input of [null,{}, {...modeFrame(0),width:0}, {...modeFrame(0),height:Infinity},
+    {...modeFrame(0),confidence:1.1},{...modeFrame(0),pinching:'true'}, {...modeFrame(0),landmarks:bad}]) {
+    const result=new ModeGestureTracker().update(input);
+    assert.equal(result.phase,'lost');assert.equal(result.ready,false);assert.equal(result.triggered,false);
+  }
+  for (const options of [{holdMs:0},{holdMs:NaN},{releaseMs:0},{cooldownMs:-1},{maxGapMs:0},{minConfidence:1.1},{minPalmSize:0}]) {
+    assert.throws(()=>new ModeGestureTracker(options),RangeError);
   }
 });
 
