@@ -1,15 +1,18 @@
-import {createScene, updateScene, sceneChanges, moveSceneObject} from '../scene-model.mjs';
+import {SCENE_LIMITS, createScene, updateScene, sceneChanges, moveSceneObject} from '../scene-model.mjs';
 import {mountLandscape} from '../scene-renderer.mjs';
 import {mountLandscapeMusic} from '../music.mjs';
 import {PinchTracker, GestureTargetTracker, SelectorGestureTracker, ModeGestureTracker} from '../gesture-model.mjs?v=d83ab1d088a4';
 import {buildGestureTargets, hitTestGestureTargets, applyTargetDrag, drawLeafTrailPatch} from '../gesture-targets.mjs?v=f8abf25eb931';
 import {mountGestureDecor, dragDecorOffset} from '../gesture-decor.mjs?v=f4f5c63fdcf3';
-import {mountGestureMenu} from '../gesture-menu.mjs?v=f8384cc52e0c';
+import {mountGestureMenu} from '../gesture-menu.mjs?v=aabf30c5899b';
+import {captureSceneObject, pasteSceneObject, deleteSceneObject} from '../gesture-edit.mjs?v=062c419d48e4';
+import {mountGestureAppearance} from '../gesture-appearance.mjs?v=a354137a225c';
 
 const $ = selector => document.querySelector(selector);
 const stage = $('#gesture-stage'), video = $('#camera-video'), svg = $('#landscape');
 const reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
 const tracker = new PinchTracker(), selector = new SelectorGestureTracker(), modeTracker = new ModeGestureTracker(), targetTracker = new GestureTargetTracker();
+let appearances=Object.freeze({}), clipboard=null, placement=null, future=[], commandTargetId=null, lastHandCursor=null;
 let scene = createScene(), decorOffsets = Object.freeze({}), history = [], gestureBefore = null, pointerBefore = null;
 let selectionMode = 'auto', lastManualId = null;
 let labDefault = null, explicitId = null, activeTarget = null, grabStart = null, drawPoints = [], hoverId = null;
@@ -18,8 +21,8 @@ let inputGeneration = 0, lastInputGeneration = -1, pointerSession = null;
 let pointerHeld = false, pointerId = null, pageFocused = document.hasFocus(), selectedObject = null;
 let stream = null, detector = null, frameId = null, epoch = 0, lastVideoTime = -1, lastInference = 0;
 let loadController = null, motionTime = 0, leafPhase = 0, previousFrame = performance.now(), lastPaint = 0, cameraState = 'off';
-const snapshot = () => ({scene, decorOffsets, leafPhase});
-function restore(value) { if (value) { scene = value.scene; decorOffsets = value.decorOffsets; if(Number.isFinite(value.leafPhase))leafPhase=value.leafPhase; targetsAt = -Infinity; } }
+const snapshot = () => ({scene, decorOffsets, leafPhase, appearances, selectionId:explicitId??commandTargetId??hoverId});
+function restore(value) { if (value) { scene = value.scene; decorOffsets = value.decorOffsets; appearances=value.appearances??Object.freeze({}); if(Number.isFinite(value.leafPhase))leafPhase=value.leafPhase; targetsAt = -Infinity; } }
 function formatHour(hour) {
   const minutes = Math.round((hour % 24) * 60);
   return String(Math.floor(minutes / 60)).padStart(2, '0') + ':' + String(minutes % 60).padStart(2, '0');
@@ -31,18 +34,25 @@ function render() {
   const leafSelected = ['leaf','leafOrigin','leafTarget','draw:leaf'].includes(explicitId ?? hoverId);
   renderer.render(scene, {phase: leafPhase, motionTime, motionPlaying, selectedObject,
     showTrajectory: leafSelected, drawingTrajectory: explicitId === 'draw:leaf' && !gestureBefore});
+  appearance.apply(appearances,renderer.getObjectPositions());
+  if(appearances[selectedObject])svg.querySelector('[data-layer="selection"]').style.display='none';
   decor.apply(decorOffsets);
+  svg.querySelectorAll('[data-edit-preview]').forEach(node=>node.removeAttribute('data-edit-preview'));
+  if(placement)svg.querySelector(`[data-scene-object="${placement.id}"]`)?.setAttribute('data-edit-preview','');
   stage.classList.toggle('night', scene.hour < 6 || scene.hour >= 19.5);
   stage.dataset.hour = String(scene.hour); stage.dataset.selectionMode = selectionMode; stage.dataset.gestureTarget = explicitId ?? (selectionMode === 'manual' ? 'manual:none' : 'auto');
   stage.dataset.activeTarget = activeTarget?.id ?? hoverId ?? explicitId ?? '';
   stage.dataset.decorOffsets = JSON.stringify(decorOffsets);
-  stage.dataset.historyCount = String(history.length);
+  stage.dataset.historyCount = String(history.length);stage.dataset.redoCount=String(future.length);
+  stage.dataset.objectCounts=JSON.stringify({trees:scene.trees,boats:scene.boats,mountains:scene.mountains,birds:scene.birds});
+  stage.dataset.placement=placement?'preview':'';stage.dataset.clipboard=clipboard?.object.kind??'';stage.dataset.appearanceIds=JSON.stringify(Object.keys(appearances));
   stage.dataset.leafTrail = JSON.stringify(scene.leafTrail);
   const boat = renderer.getObjectPositions().find(item => item.id === 'boat:0')?.point;
   if (boat) { stage.dataset.boatX = String(boat.x); stage.dataset.boatY = String(boat.y); }
-  $('#hour-label').textContent = formatHour(scene.hour);
+  $('#hour-label').textContent = formatHour(scene.hour);$('#hour-control').disabled=!!placement;
   if ($('#hour-control') !== document.activeElement) $('#hour-control').value = String(scene.hour);
-  $('#undo-lab').disabled = !history.length;
+  $('#undo-lab').disabled = !history.length&&!placement;$('#redo-lab').disabled=!future.length||!!placement;
+  $('#placement-tip').hidden=!placement;if(menu.isOpen())menu.updateEditState(editState());
   const modeLabel=selectionMode==='manual'?'手动选择':'自动拾取';
   $('#target-mode').textContent=modeLabel;$('#selection-mode-label').textContent=modeLabel;
   $('#toggle-mode').setAttribute('aria-pressed',String(selectionMode==='manual'));
@@ -51,8 +61,8 @@ function render() {
   updateHighlight();
 }
 function commit(before) {
-  if (before && (sceneChanges(before.scene, scene).length || JSON.stringify(before.decorOffsets) !== JSON.stringify(decorOffsets))) {
-    history.push(before); if (history.length > 25) history.shift();
+  if (before && (sceneChanges(before.scene, scene).length || JSON.stringify(before.decorOffsets) !== JSON.stringify(decorOffsets) || before.appearances!==appearances)) {
+    history.push(before);future=[]; if (history.length > 25) history.shift();
   }
   targetsAt = -Infinity; render();
 }
@@ -70,12 +80,16 @@ function normalizedCursor(event) {
   return {x:Math.max(0,Math.min(1,(event.clientX-r.left)/r.width)),y:Math.max(0,Math.min(1,(event.clientY-r.top)/r.height))};
 }
 function applyDrag(before,target,start,current) {
+  appearances=before.appearances;
   if (target.operation === 'decor') decorOffsets = Object.freeze(Object.fromEntries(Object.entries(dragDecorOffset(before.decorOffsets,target.id,start,current)).filter(([,p])=>p.x!==0||p.y!==0)));
   else scene = updateScene(before.scene,applyTargetDrag(before.scene,target,start,current));
   targetsAt = -Infinity;
 }
 stage.addEventListener('pointerdown',event=>{
   if (!event.isPrimary || event.button !== 0 || !event.target.closest('#landscape,#hour-control')) return;
+  if(placement&&event.target.closest('#landscape')){
+    event.preventDefault();event.stopImmediatePropagation();placement.pointerId=event.pointerId;pointerHeld=true;pointerId=event.pointerId;previewPlacement(normalizedCursor(event));svg.setPointerCapture(event.pointerId);return;
+  }
   cancelGesture(); pointerHeld = true; pointerId = event.pointerId; lastInputGeneration = inputGeneration;
   if (!event.target.closest('#landscape') || explicitId === 'draw:leaf') return;
   const start = normalizedCursor(event), target = hitTestGestureTargets(collectTargets(true),start,{explicitId,slop:.006});
@@ -87,11 +101,13 @@ stage.addEventListener('pointerdown',event=>{
   svg.setPointerCapture(event.pointerId);
 },{capture:true});
 window.addEventListener('pointermove',event=>{
+  if(placement&&event.target.closest?.('#landscape')){previewPlacement(normalizedCursor(event));return;}
   if (event.pointerId !== pointerId || pointerSession?.kind !== 'custom' || !pointerBefore || pointerSession.generation !== inputGeneration) return;
   applyDrag(pointerBefore,pointerSession.target,pointerSession.start,normalizedCursor(event)); render();
 },{capture:true});
 window.addEventListener('pointerup',event=>{
   if (event.pointerId !== pointerId) return;
+  if(placement?.pointerId===event.pointerId){finishPlacement(normalizedCursor(event));pointerHeld=false;pointerId=null;return;}
   if (pointerSession?.kind === 'custom' && pointerBefore && pointerSession.generation === inputGeneration) {
     applyDrag(pointerBefore,pointerSession.target,pointerSession.start,normalizedCursor(event));
     const before = pointerBefore; pointerBefore = null; pointerSession = null; commit(before);
@@ -100,7 +116,12 @@ window.addEventListener('pointerup',event=>{
 },{capture:true});
 window.addEventListener('pointercancel',event=>{
   if (event.pointerId !== pointerId) return;
+  if(placement)cancelPlacement('已取消未放置的副本。');
   restore(pointerBefore); pointerHeld = false; pointerId = null; invalidatePointer(); render();
+},{capture:true});
+window.addEventListener('lostpointercapture',event=>{
+  if(event.pointerId!==pointerId)return;
+  cancelPlacement('已取消未放置的副本。');restore(pointerBefore);pointerHeld=false;pointerId=null;invalidatePointer();render();
 },{capture:true});
 stage.addEventListener('keydown',event=>{
   if (['ArrowLeft','ArrowRight','ArrowUp','ArrowDown','Home','End'].includes(event.key) && event.target.closest('#landscape,input[type=range]')) {
@@ -124,7 +145,7 @@ const renderer = mountLandscape(svg, {
     if (phase === 'end') { const before = pointerBefore; pointerBefore = null; pointerSession = null; commit(before); }
   },
   onObjectSelect({id}) {
-    if(pointerBefore)return;cancelGesture();selectionMode='manual';lastManualId=id;explicitId=id;selectedObject=id;menu.close();stage.classList.remove('menu-open');collectTargets(true);render();
+    if(pointerBefore)return;cancelPlacement();cancelGesture();selectionMode='manual';lastManualId=id;explicitId=id;selectedObject=id;menu.close();stage.classList.remove('menu-open');collectTargets(true);render();
   },
   onObjectDrag({id, point, phase}) {
     if (phase === 'start' && !beginPointer('object',id)) return false;
@@ -150,6 +171,7 @@ const renderer = mountLandscape(svg, {
     }
   }
 });
+const appearance=mountGestureAppearance(svg);
 const decor = mountGestureDecor(svg), music = mountLandscapeMusic(stage);
 const menu = mountGestureMenu($('#gesture-menu'), {onSelect:setTarget,onAction:menuAction,onModeChange:next=>setSelectionMode(next,{fromMenu:true})});
 function updateCameraState(next) {
@@ -192,6 +214,7 @@ function collectTargets(force = false) {
   }
   const targets=[...buildGestureTargets(scene,renderer.getObjectPositions(),geometry).map(target=>['leafOrigin','leafTarget'].includes(target.id)?{...target,requireExplicit:true}:target),...decor.getTargets()];
   lastTargets=targets; targetsAt=now; stage.dataset.targetCount=String(targets.length);
+  if(appearances['tree:0']){const i=targets.findIndex(t=>t.id==='branches');if(i>=0)targets.splice(i,1);}
   if (menu.isOpen()) menu.updateTargets(targets);
   return targets;
 }
@@ -203,15 +226,16 @@ function updateHighlight() {
   box.hidden=false;box.style.left=b.left*100+'%';box.style.top=b.top*100+'%';box.style.width=(b.right-b.left)*100+'%';box.style.height=(b.bottom-b.top)*100+'%';
   box.querySelector('span').textContent=target.label;
 }
-function closeTargetMenu() {menu.close();stage.classList.remove('menu-open');menuReleaseAt=null;}
+function closeTargetMenu() {menu.close();stage.classList.remove('menu-open');menuReleaseAt=null;commandTargetId=null;}
 function openTargetMenu(message='先张开手，再将光标停在按钮上选择。') {
-  menu.open({targets:collectTargets(true),selectedId:explicitId,scene,selectionMode});
+  menu.open({targets:collectTargets(true),selectedId:explicitId??commandTargetId,scene,selectionMode,editState:editState()});
   stage.classList.add('menu-open');menuReleaseAt=null;status(message);render();
 }
 function availableTarget(id,targets) {return id==='draw:leaf'?scene.trees>0:targets.some(target=>target.id===id);}
 function setSelectionMode(next,{fromMenu=false}={}) {
+  if(placement)cancelPlacement();
   if(!['auto','manual'].includes(next)||cameraState==='loading'||gestureBefore||pointerBefore||pointerHeld)return;
-  const targets=collectTargets(true),candidate=hoverId;
+  const targets=collectTargets(true),candidate=hoverId??commandTargetId;
   if(next===selectionMode){
     if(next==='manual'&&!explicitId&&!menu.isOpen())openTargetMenu('手动选择：请在菜单中选一个对象。');
     else if(next==='auto')closeTargetMenu();
@@ -239,19 +263,100 @@ function setTarget(id) {
   if(cameraState==='loading')return;
   if(id==='auto'){setSelectionMode('auto');return;}
   if(id==='manual'){setSelectionMode('manual',{fromMenu:menu.isOpen()});return;}
-  cancelPointer();cancelGesture();selectionMode='manual';lastManualId=id;explicitId=id;
+  cancelPlacement();cancelPointer();cancelGesture();selectionMode='manual';lastManualId=id;explicitId=id;
   selectedObject=isObject(explicitId)?explicitId:null;
   closeTargetMenu();collectTargets(true);render();
   status(`${lastTargets.find(t=>t.id===explicitId)?.label??'落叶路线'}已固定：${lastTargets.find(t=>t.id===explicitId)?.instruction??'捏合画线，松开保存。'} 三指保持可回到自动拾取。`);
 }
 function toggleMenu() {
-  const wasOpen=menu.isOpen();cancelPointer();cancelGesture();
+  const wasOpen=menu.isOpen();cancelPlacement();const context=explicitId??hoverId;cancelPointer();cancelGesture();commandTargetId=context;
   if(wasOpen)closeTargetMenu();else openTargetMenu('先放下 V 手势，再将光标停在按钮上选择。');
 }
+const NATIVE_FIELDS={tree:'trees',boat:'boats',mountain:'mountains',bird:'birds'};
+const NATIVE_LABELS={tree:'树',boat:'帆船',mountain:'山峰',bird:'飞鸟'};
+function nativeExists(id,value=scene){const match=/^(tree|boat|mountain|bird):(\d+)$/u.exec(id??'');return !!match&&+match[2]<value[NATIVE_FIELDS[match[1]]];}
+function objectLabel(id){const [kind,index]=String(id).split(':');return NATIVE_LABELS[kind]?`${NATIVE_LABELS[kind]} ${+index+1}`:lastTargets.find(t=>t.id===id)?.label??'';}
+function editTarget(){return explicitId??commandTargetId??hoverId;}
+function editState(){
+  const id=editTarget(),editable=nativeExists(id),busy=!!placement||cameraState==='loading';
+  const kind=clipboard?.object.kind,field=NATIVE_FIELDS[kind],canPaste=!!clipboard&&scene[field]<SCENE_LIMITS[field].max;
+  const selectedLabel=objectLabel(id),unsupported=selectedLabel?'此项是环境或轨迹；请先选择树、山、船或鸟。':'请先在画布或 V 菜单中选择树、山、船或鸟。';
+  const maxed=editable&&scene[NATIVE_FIELDS[id.split(':')[0]]]===SCENE_LIMITS[NATIVE_FIELDS[id.split(':')[0]]].max;
+  return {selectedLabel,clipboardLabel:clipboard?objectLabel(clipboard.object.sourceId):'',canCopy:editable&&!busy,canCut:editable&&!busy,canDelete:editable&&!busy,canDuplicate:editable&&!maxed&&!busy,canPaste:canPaste&&!busy,canUndo:history.length>0||!!placement,canRedo:future.length>0&&!busy,
+    reason:{copy:busy?'先放下或取消当前副本。':unsupported,cut:busy?'先放下或取消当前副本。':unsupported,delete:busy?'先放下或取消当前副本。':unsupported,duplicate:maxed?'这一类对象已达到数量上限。':unsupported,paste:!clipboard?'先复制一个风景对象。':!canPaste?'这一类对象已达到数量上限，可先删除一个。':'先放下或取消当前副本。',undo:'还没有可撤销的编辑。',redo:'还没有可重做的编辑。'}};
+}
+function captureAppearances(positions){
+  const result={...appearances};for(const item of positions){if(item.point.x<0||item.point.x>1||item.point.y<0||item.point.y>1)continue;result[item.id]=appearances[item.id]??appearance.capture(item.id,item.point);}return Object.freeze(result);
+}
+function editedAppearances(captured,kind,remap=null,newId=null,newToken=null){
+  const next={};
+  for(const [id,token] of Object.entries(appearances)){const target=remap?remap[id]:id;if(target&&nativeExists(target))next[target]=token;}
+  for(const [id,token] of Object.entries(captured)){const target=remap?remap[id]:id;if(!target||!nativeExists(target))continue;if(target!==id||(['boat','mountain'].includes(kind)&&id.startsWith(kind+':')))next[target]=token;}
+  if(newId)next[newId]=newToken;
+  return Object.freeze(next);
+}
+function flowerAnchors(){
+  const r=svg.getBoundingClientRect();return Object.fromEntries(Array.from(svg.querySelectorAll('[data-gesture-decor^="decor:flower:"]')).map(node=>{const b=node.getBoundingClientRect();return [node.getAttribute('data-gesture-decor'),{x:(b.left+b.width/2-r.left)/r.width,y:(b.top+b.height/2-r.top)/r.height}];}));
+}
+function stabilizeFlowers(before){
+  const current=flowerAnchors(),next={...decorOffsets};let changed=false;
+  for(const [id,p] of Object.entries(before)){const n=current[id];if(!n)continue;const dx=p.x-n.x,dy=p.y-n.y;if(Math.abs(dx)<1e-5&&Math.abs(dy)<1e-5)continue;const old=next[id]??{x:0,y:0};next[id]=Object.freeze({x:Math.max(-1,Math.min(1,Math.round((old.x+dx)*1e6)/1e6)),y:Math.max(-1,Math.min(1,Math.round((old.y+dy)*1e6)/1e6))});changed=true;}
+  if(changed){decorOffsets=Object.freeze(next);render();}
+}
+function copyForEdit(id,positions){return Object.freeze({object:captureSceneObject(scene,id,positions),appearance:appearances[id]??appearance.capture(id,positions.find(p=>p.id===id).point)});}
+function setEditedSelection(id){selectionMode='manual';explicitId=id;lastManualId=id;selectedObject=isObject(id)?id:null;commandTargetId=null;hoverId=null;}
+function performEdit(command){
+  const id=editTarget(),state=editState(),flag={copy:'canCopy',cut:'canCut',paste:'canPaste',duplicate:'canDuplicate',delete:'canDelete'}[command];
+  if(!flag||!state[flag]){status(state.reason[command]??'请先选择一个可编辑对象。');return;}
+  cancelPointer();cancelGesture();closeTargetMenu();
+  const before=snapshot(),positions=renderer.getObjectPositions(),inputBefore={selectionMode,explicitId,lastManualId,selectedObject},clipboardBefore=clipboard;before.selectionId=id;
+  try{
+    if(command==='copy'){clipboard=copyForEdit(id,positions);setEditedSelection(id);render();status(`已复制${objectLabel(id)}。选择“粘贴”，再捏合松开放下副本。`);return;}
+    if(command==='paste'){beginPlacement();return;}
+    const copied=command==='cut'||command==='duplicate'?copyForEdit(id,positions):null;
+    const captured=captureAppearances(positions),flowers=flowerAnchors(),kind=id.split(':')[0];
+    if(command==='duplicate'){
+      const point={x:Math.min(1,copied.object.point.x+.06),y:Math.min(1,copied.object.point.y+.06)};
+      const result=pasteSceneObject(scene,copied.object,point,positions);scene=result.scene;
+      appearances=editedAppearances(captured,kind,null,result.id,copied.appearance);setEditedSelection(result.id);
+    }else{
+      const result=deleteSceneObject(scene,id,positions);scene=result.scene;appearances=editedAppearances(captured,kind,result.remap);
+      if(command==='cut')clipboard=copied;
+      setEditedSelection(null);
+    }
+    render();if(kind==='tree')stabilizeFlowers(flowers);commit(before);collectTargets(true);render();
+    status(command==='duplicate'?'已复制一份，可继续移动或撤销。':command==='cut'?'已剪切到风景剪贴板，可以在新位置粘贴。':'已删除对象，可撤销恢复。');
+  }catch(error){cancelPlacement();restore(before);({selectionMode,explicitId,lastManualId,selectedObject}=inputBefore);clipboard=clipboardBefore;render();status(error?.message??'本次编辑未完成。');}
+}
+function beginPlacement(){
+  const before=snapshot(),positions=renderer.getObjectPositions(),captured=captureAppearances(positions),flowers=flowerAnchors();
+  const point=lastHandCursor??{x:Math.min(.88,clipboard.object.point.x+.06),y:Math.min(.85,clipboard.object.point.y+.06)};
+  const result=pasteSceneObject(scene,clipboard.object,point,positions);
+  placement={before,positions,captured,clip:clipboard,id:result.id,held:false,point,flowers,decorOffsets:null,input:{selectionMode,explicitId,lastManualId,selectedObject}};
+  scene=result.scene;appearances=editedAppearances(captured,clipboard.object.kind,null,result.id,clipboard.appearance);setEditedSelection(result.id);
+  render();if(clipboard.object.kind==='tree')stabilizeFlowers(flowers);placement.decorOffsets=decorOffsets;collectTargets(true);render();
+  status('粘贴预览：移动手掌定位，捏合后松开放下。也可按住鼠标拖放；Esc 取消。');
+}
+function previewPlacement(point){
+  if(!placement||!point)return;
+  const result=pasteSceneObject(placement.before.scene,placement.clip.object,point,placement.positions);
+  scene=result.scene;placement.point={...point};decorOffsets=placement.decorOffsets;render();
+}
+function finishPlacement(point){
+  if(!placement)return;previewPlacement(point);const before=placement.before,id=placement.id;placement=null;stage.classList.remove('gesture-grabbing');
+  tracker.cancel('placed');selector.cancel();modeTracker.cancel();setEditedSelection(id);commit(before);collectTargets(true);render();status('副本已放下。V 菜单可继续粘贴、复制或删除。');
+}
+function cancelPlacement(message=''){
+  if(!placement)return false;const old=placement,before=old.before,capturedPointer=old.pointerId;placement=null;pointerHeld=false;pointerId=null;
+  if(capturedPointer!=null&&svg.hasPointerCapture?.(capturedPointer))svg.releasePointerCapture(capturedPointer);restore(before);stage.classList.remove('gesture-grabbing');
+  tracker.cancel('cancelled');selector.cancel();modeTracker.cancel();targetTracker.cancel();
+  ({selectionMode,explicitId,lastManualId,selectedObject}=old.input);commandTargetId=null;hoverId=null;render();if(message)status(message);return true;
+}
 function menuAction(id) {
-  cancelPointer();menu.close();stage.classList.remove('menu-open');menuReleaseAt=null;
+  if(['copy','cut','paste','duplicate','delete'].includes(id)){performEdit(id);return;}
+  cancelPointer();closeTargetMenu();
   if (id==='draw:leaf') {if (!scene.trees) {status('先增加一棵树，就可以画落叶路线。');return;}setTarget('draw:leaf');}
-  else if (id==='undo') undo(); else if (id==='reset') reset();
+  else if(id==='redo')redo();else if (id==='undo') undo(); else if (id==='reset') reset();
   else if (id==='motion') {cancelGesture();motionPlaying=!motionPlaying;render();status(motionPlaying?'风景继续流动。':'风景已暂停，可以慢慢调整。');}
   else if (id==='music') {stage.querySelector('.music-toggle').click();}
   else if (id==='immersive') {cancelGesture();stage.classList.toggle('immersive');status(stage.classList.contains('immersive')?'已进入沉浸画布。V 手势仍可打开菜单。':'已退出沉浸画布。');}
@@ -326,6 +431,7 @@ function handleFrame(result, now) {
   stage.dataset.handPhase=frame.phase;stage.dataset.selectorPhase=select.phase;stage.dataset.modeGesturePhase=mode.phase;
   handFeedback(result.landmarks?.[0],frame);
   const cursor=$('#hand-cursor');cursor.hidden=!frame.cursor;
+  if(frame.cursor)lastHandCursor={...frame.cursor};
   if (frame.cursor) {cursor.style.left=frame.cursor.x*100+'%';cursor.style.top=frame.cursor.y*100+'%';}
   $('#mode-progress').value=mode.progress;$('#mode-hint').textContent=mode.pose?'保持三指 · 切换模式':'三指切模式';
   $('#selector-progress').value=select.progress; $('#selector-hint').textContent=select.pose ? '保持 V · 打开对象菜单' : 'V 手势选对象';
@@ -337,6 +443,14 @@ function handleFrame(result, now) {
     const r=stage.getBoundingClientRect();
     menu.update(frame.cursor?{x:r.left+frame.cursor.x*r.width,y:r.top+frame.cursor.y*r.height}:null,now,
       {enabled:menuReleaseAt!==null&&now-menuReleaseAt>=160});
+    return;
+  }
+  if(placement){
+    if(frame.phase==='cancel'||frame.phase==='lost'){cancelPlacement('手掌丢失，已取消未放置的副本。');return;}
+    if(select.pose||mode.pose)return;
+    if(frame.cursor)previewPlacement(frame.cursor);
+    if(frame.phase==='start'){placement.held=true;stage.classList.add('gesture-grabbing');}
+    if(frame.phase==='end'&&placement?.held)finishPlacement(frame.cursor);
     return;
   }
   if (frame.phase==='cancel'||frame.phase==='lost') {
@@ -373,7 +487,7 @@ function inferenceFrame(session) {
   frameId = requestAnimationFrame(() => {
     if (session !== epoch || !detector || cameraState !== 'tracking') return;
     const now = performance.now();
-    if (gestureBefore && now - lastInference > tracker.options.maxGapMs) cancelGesture('镜头暂时没有新画面，已取消抓取。张开手后重试。');
+    if((gestureBefore||(placement&&!pointerHeld&&pageFocused))&&now-lastInference>tracker.options.maxGapMs){if(placement)cancelPlacement('镜头暂时没有新画面，已取消粘贴预览。');else cancelGesture('镜头暂时没有新画面，已取消抓取。张开手后重试。');}
     if (pageFocused && !pointerHeld && !pointerBefore && video.readyState >= 2 && video.currentTime !== lastVideoTime && now - lastInference >= 55) {
       lastVideoTime = video.currentTime; lastInference = now;
       try { handleFrame(detector.detectForVideo(video, now), now); }
@@ -385,7 +499,7 @@ function inferenceFrame(session) {
 function stopCamera(message = '摄像头已关闭。你仍可直接拖动风景。', state = 'off') {
   epoch++; if (frameId !== null) cancelAnimationFrame(frameId); frameId = null;
   loadController?.abort(); loadController = null;
-  cancelPointer();cancelGesture();
+  cancelPlacement();closeTargetMenu();cancelPointer();cancelGesture();
   const activeDetector = detector; detector = null; try { activeDetector?.close(); } catch {}
   stream?.getTracks().forEach(track => track.stop()); stream = null;
   video.pause(); video.srcObject = null; $('#camera-preview').hidden = true;
@@ -427,7 +541,7 @@ async function startCamera() {
     if (session !== epoch) return;
     loadController = null; tracker.cancel('start'); selector.cancel();modeTracker.cancel(); targetTracker.cancel(); lastVideoTime = -1; lastInference = 0;
     updateCameraState('tracking'); status('先张开一只手，再捏合。');
-    $('#camera-note').textContent = (lastAssets?.total && lastAssets.cacheLoaded === lastAssets.total ? '本次读取本机缓存，没有重新下载模型。' : '识别文件已准备好，之后可复用浏览器缓存。') + ' V 手势选对象，捏合移动；松开保存，丢手取消。画面不上传。';
+    $('#camera-note').textContent = (lastAssets?.total && lastAssets.cacheLoaded === lastAssets.total ? '本次读取本机缓存，没有重新下载模型。' : '识别文件已准备好，之后可复用浏览器缓存。') + ' V 菜单可选择、复制、粘贴和删除；三指（食／中／无名）切模式。松开保存，丢手取消，画面不上传。';
     inferenceFrame(session);
   } catch (error) {
     if (session !== epoch) { pendingStream?.getTracks().forEach(track => track.stop()); try { pendingDetector?.close(); } catch {} return; }
@@ -435,14 +549,29 @@ async function startCamera() {
   }
 }
 function reset() {
-  cancelPointer();cancelGesture();const before=snapshot();
-  scene=labDefault??createScene();decorOffsets=Object.freeze({});selectedObject=null;explicitId=null;selectionMode='auto';lastManualId=null;
+  cancelPlacement();cancelPointer();cancelGesture();const before=snapshot();
+  scene=labDefault??createScene();decorOffsets=Object.freeze({});appearances=Object.freeze({});clipboard=null;commandTargetId=null;selectedObject=null;explicitId=null;selectionMode='auto';lastManualId=null;
   motionTime=0;leafPhase=0;motionPlaying=!reduced;menu.close();stage.classList.remove('menu-open');commit(before);collectTargets(true);render();
   status('已恢复初始风景。抬手靠近物体，或比 V 切换对象。');
 }
+function restoreSelection(saved) {
+  render();collectTargets(true);
+  if(selectionMode==='manual'){
+    explicitId=availableTarget(saved.selectionId,lastTargets)?saved.selectionId:null;
+    selectedObject=isObject(explicitId)?explicitId:null;
+    if(explicitId)lastManualId=explicitId;
+  }else{explicitId=null;selectedObject=null;}
+  commandTargetId=null;render();
+}
 function undo() {
+  if(placement){cancelPlacement('已取消粘贴预览。');return;}
   cancelPointer();cancelGesture();const previous=history.pop();
-  if(previous){restore(previous);collectTargets(true);render();status('已撤销上一次调整。');}else status('还没有需要撤销的调整。');
+  if(previous){future.push(snapshot());restore(previous);restoreSelection(previous);status('已撤销上一次编辑。');}else status('还没有需要撤销的编辑。');
+}
+function redo() {
+  if(placement){status('先放下或取消当前副本。');return;}
+  cancelPointer();cancelGesture();const next=future.pop();
+  if(next){history.push(snapshot());restore(next);restoreSelection(next);status('已重做上一次编辑。');}else status('还没有需要重做的编辑。');
 }
 async function fullscreen() {
   try { if(document.fullscreenElement)await document.exitFullscreen();else await stage.requestFullscreen({navigationUI:'hide'}); }
@@ -450,31 +579,36 @@ async function fullscreen() {
 }
 $('#start-camera').addEventListener('click',startCamera);
 $('#stop-camera').addEventListener('click',()=>{menu.close();stage.classList.remove('menu-open');stopCamera();});
-$('#reset-lab').addEventListener('click',reset);$('#undo-lab').addEventListener('click',undo);
+$('#reset-lab').addEventListener('click',reset);$('#undo-lab').addEventListener('click',undo);$('#redo-lab').addEventListener('click',redo);
 $('#fullscreen-lab').addEventListener('click',fullscreen);$('#open-targets').addEventListener('click',toggleMenu);
 $('#auto-target').addEventListener('click',()=>setTarget('auto'));
 $('#toggle-mode').addEventListener('click',toggleSelectionMode);
 $('#exit-immersive').addEventListener('click',()=>{stage.classList.remove('immersive');status('已退出沉浸画布。');});
 $('#hour-control').addEventListener('input',event=>{
+  if(placement)return;
   if(lastInputGeneration!==inputGeneration)return;
   if(!pointerBefore&&!beginPointer('range','hour'))return;
   if(!acceptsPointer('range','hour'))return;
   scene=updateScene(scene,{hour:Number(event.target.value)});render();
 });
-$('#hour-control').addEventListener('change',()=>{if(!acceptsPointer('range','hour'))return;const before=pointerBefore;pointerBefore=null;pointerSession=null;commit(before);});
+$('#hour-control').addEventListener('change',()=>{if(placement)return;if(!acceptsPointer('range','hour'))return;const before=pointerBefore;pointerBefore=null;pointerSession=null;commit(before);});
 document.addEventListener('keydown',event=>{
-  if(event.target.closest('input,textarea,select,[contenteditable]')||event.repeat)return;
+  if(event.defaultPrevented||event.target.closest('input,textarea,select,[contenteditable]')||event.repeat||event.isComposing||event.keyCode===229)return;
   const key=event.key.toLowerCase();
-  if((event.metaKey||event.ctrlKey)&&key==='z'){event.preventDefault();undo();}
+  if((event.metaKey||event.ctrlKey)&&!event.altKey){
+    if(key==='z'){event.preventDefault();event.shiftKey?redo():undo();}
+    else if(key==='y'){event.preventDefault();redo();}
+    else if(!event.shiftKey&&!window.getSelection()?.toString()&&['c','x','v','d'].includes(key)){const command={c:'copy',x:'cut',v:'paste',d:'duplicate'}[key];if(placement||nativeExists(editTarget())||(command==='paste'&&clipboard)){event.preventDefault();performEdit(command);}}
+  }
   else if(!event.metaKey&&!event.ctrlKey&&!event.altKey){
-    if(key==='t')toggleSelectionMode();else if(key==='r')reset();else if(key==='m')stage.querySelector('.music-toggle').click();else if(key==='f')fullscreen();
-    else if(key==='v')toggleMenu();else if(key==='a')setTarget('auto');else if(key==='l')menuAction('draw:leaf');else if(key===' ') {event.preventDefault();menuAction('motion');}
-    else if(key==='escape'){menu.close();stage.classList.remove('menu-open','immersive');cancelPointer();cancelGesture('已取消调整。');}
+    if((key==='delete'||key==='backspace')&&editState().canDelete){event.preventDefault();performEdit('delete');}else if(key==='t')toggleSelectionMode();else if(key==='r')reset();else if(key==='m')stage.querySelector('.music-toggle').click();else if(key==='f')fullscreen();
+    else if(key==='v')toggleMenu();else if(key==='a')setTarget('auto');else if(key==='l')menuAction('draw:leaf');else if(key===' '&&!event.target.closest('button,a,summary,[role=button],[role=slider]')) {event.preventDefault();menuAction('motion');}
+    else if(key==='escape'){if(placement){cancelPlacement('已取消粘贴预览。');return;}closeTargetMenu();stage.classList.remove('immersive');cancelPointer();cancelGesture('已取消调整。');}
   }
 });
 document.addEventListener('visibilitychange',()=>{previousFrame=performance.now();if(document.hidden&&['loading','tracking'].includes(cameraState))stopCamera('已离开实验页，摄像头已关闭。');});
 window.addEventListener('blur',()=>{
-  pageFocused=false;cancelPointer();menu.resetDwell();menuReleaseAt=null;
+  pageFocused=false;cancelPlacement();cancelPointer();menu.resetDwell();menuReleaseAt=null;
   cancelGesture(cameraState==='tracking'?'已暂停手势。返回页面、张开手后继续。':'');
 });
 window.addEventListener('focus',()=>{pageFocused=true;});
@@ -482,7 +616,7 @@ window.addEventListener('pagehide',()=>stopCamera());
 window.addEventListener('resize',()=>{targetsAt=-Infinity;render();});
 function animate(now){
   const delta=Math.min((now-previousFrame)/1000,.1);previousFrame=now;
-  if(motionPlaying&&!gestureBefore&&!document.hidden&&cameraState!=='loading'){
+  if(motionPlaying&&!gestureBefore&&!placement&&!document.hidden&&cameraState!=='loading'){
     motionTime+=delta;leafPhase=(leafPhase+delta/7)%1;
     if(now-lastPaint>=33)render();
   }

@@ -1,5 +1,6 @@
-const PAGE_SIZE = 5; // Five content items, up to three navigation buttons, plus two fixed mode controls.
+const PAGE_SIZE = 5; // Five content items, up to three navigation buttons, plus two fixed mode controls and three editing shortcuts.
 const CATEGORIES = Object.freeze([
+  ['edit', '编辑对象'],
   ['sun', '太阳 / 月亮'], ['tree', '树'], ['mountain', '山'], ['boat', '船'],
   ['bird', '鸟'], ['flower', '花'], ['cloud', '云'], ['leaf', '落叶'],
   ['environment', '环境'], ['layers', '图层'], ['actions', '操作'],
@@ -10,6 +11,69 @@ const ACTIONS = Object.freeze([
   ['undo', '撤销'], ['reset', '恢复默认'], ['motion', '动画开关'],
   ['music', '音乐开关'], ['immersive', '沉浸画布'], ['close', '关闭菜单'],
 ]);
+const EDIT_ACTIONS = Object.freeze([
+  ['copy', '复制'], ['cut', '剪切'], ['paste', '粘贴'], ['duplicate', '复制一份'],
+  ['delete', '删除'], ['undo', '撤销'], ['redo', '重做'],
+]);
+const EDIT_FLAGS = Object.freeze({copy: 'canCopy', cut: 'canCut', paste: 'canPaste',
+  duplicate: 'canDuplicate', delete: 'canDelete', undo: 'canUndo', redo: 'canRedo'});
+const EDIT_STATE_KEYS = new Set(['selectedLabel', 'clipboardLabel', 'reason', ...Object.values(EDIT_FLAGS)]);
+
+// The menu receives capability state, not clipboard contents or editable code.
+// Copy only ordinary data fields so a stale or malformed state is rejected before
+// changing the current page; external labels and reasons are never parsed as HTML.
+function snapshotEditState(value = {}) {
+  if (!value || typeof value !== 'object' || ![Object.prototype, null].includes(Object.getPrototypeOf(value))) {
+    throw new TypeError('Gesture edit state must be a plain data object.');
+  }
+  const data = {};
+  for (const key of Reflect.ownKeys(value)) {
+    const property = Object.getOwnPropertyDescriptor(value, key);
+    if (typeof key !== 'string' || !EDIT_STATE_KEYS.has(key) || !property.enumerable || !Object.hasOwn(property, 'value')) {
+      throw new TypeError('Unknown or unsafe gesture edit state field.');
+    }
+    data[key] = property.value;
+  }
+  const result = {};
+  for (const key of ['selectedLabel', 'clipboardLabel']) {
+    if (data[key] !== undefined && typeof data[key] !== 'string') throw new TypeError('Gesture edit labels must be text.');
+    result[key] = (data[key] ?? '').trim();
+  }
+  for (const key of Object.values(EDIT_FLAGS)) {
+    if (data[key] !== undefined && typeof data[key] !== 'boolean') throw new TypeError('Gesture edit capabilities must be booleans.');
+    result[key] = data[key] === true;
+  }
+  const reason = data.reason;
+  if (reason !== undefined && typeof reason !== 'string'
+    && (!reason || typeof reason !== 'object' || ![Object.prototype, null].includes(Object.getPrototypeOf(reason)))) {
+    throw new TypeError('Gesture edit reasons must be text or an action map.');
+  }
+  const reasons = {};
+  if (typeof reason === 'string') {
+    for (const [id] of EDIT_ACTIONS) reasons[id] = reason.trim();
+  } else if (reason) {
+    for (const key of Reflect.ownKeys(reason)) {
+      const property = Object.getOwnPropertyDescriptor(reason, key);
+      if (typeof key !== 'string' || !Object.hasOwn(EDIT_FLAGS, key) || !property.enumerable
+        || !Object.hasOwn(property, 'value') || typeof property.value !== 'string') {
+        throw new TypeError('Unknown or unsafe gesture edit reason.');
+      }
+    }
+    // Stable ordering keeps equivalent updates from replacing the measured DOM.
+    for (const [id] of EDIT_ACTIONS) if (Object.hasOwn(reason, id)) reasons[id] = reason[id].trim();
+  }
+  result.reason = Object.freeze(reasons);
+  return Object.freeze(result);
+}
+function editCommand(state, id, label, prefix = 'action') {
+  const selected = Boolean(state.selectedLabel), clipboard = Boolean(state.clipboardLabel);
+  const contextReady = id === 'paste' ? clipboard : ['undo', 'redo'].includes(id) || selected;
+  const enabled = contextReady && state[EDIT_FLAGS[id]];
+  const fallback = id === 'paste' ? clipboard ? '当前不能粘贴，请先减少同类对象数量。' : '先复制一个对象。'
+    : id === 'undo' ? '还没有可撤销的操作。' : id === 'redo' ? '还没有可重做的操作。' : '先选择一个可编辑对象。';
+  const reason = enabled ? '' : !contextReady ? fallback : state.reason[id] || fallback;
+  return {key: `${prefix}:${id}`, label, type: 'action', id, disabled: !enabled, reason};
+}
 const clientPoint = point => point && Number.isFinite(point.x) && Number.isFinite(point.y);
 const measuredRect = value => value && [value.left, value.top, value.right, value.bottom].every(Number.isFinite)
   && value.right > value.left && value.bottom > value.top;
@@ -29,7 +93,7 @@ function snapshotTargets(value) {
 
 /** Pure menu inventory and navigation. No DOM, camera, network, or callbacks. */
 export function createGestureMenuState() {
-  let targets = [], selectedId = null, selectionMode = 'auto', scene = {}, category = 'root', page = 0;
+  let targets = [], selectedId = null, selectionMode = 'auto', scene = {}, category = 'root', page = 0, editState = snapshotEditState();
   const checkedMode = value => {
     if (!['auto', 'manual'].includes(value)) throw new RangeError('Unknown gesture selection mode.');
     return value;
@@ -38,7 +102,8 @@ export function createGestureMenuState() {
     selected: selectedId === target.id});
   function items() {
     if (category === 'root') return CATEGORIES.map(([id, label]) => ({key: `category:${id}`, label, type: 'category', id}));
-    if (category === 'actions') return ACTIONS.map(([id, label]) => ({key: `action:${id}`, label, type: 'action', id}));
+    if (category === 'edit') return EDIT_ACTIONS.map(([id, label]) => editCommand(editState, id, label));
+    if (category === 'actions') return ACTIONS.map(([id, label]) => id === 'undo' ? editCommand(editState, id, label) : {key: `action:${id}`, label, type: 'action', id});
     let filtered;
     if (category === 'leaf') filtered = targets.filter(target => LEAF_IDS.has(target.id));
     else if (category === 'environment') filtered = targets.filter(target => target.id.startsWith('count:') || ENVIRONMENT_IDS.has(target.id));
@@ -63,7 +128,9 @@ export function createGestureMenuState() {
     const modeItems = [['auto', '自动拾取'], ['manual', '手动选择']].map(([id, label]) => ({
       key: `mode:${id}`, label, type: 'mode', id, selected: selectionMode === id,
     }));
-    return {category, selectionMode, modeItems, title: category === 'root' ? '选择要控制的内容'
+    const editItems = EDIT_ACTIONS.filter(([id]) => ['copy', 'paste', 'delete'].includes(id))
+      .map(([id, label]) => editCommand(editState, id, label, 'quick'));
+    return {category, selectionMode, modeItems, editItems, editState, title: category === 'root' ? '选择要控制的内容'
       : CATEGORIES.find(([id]) => id === category)?.[1] ?? '选择内容',
     page, pageCount, items: all.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE), footer};
   }
@@ -73,12 +140,15 @@ export function createGestureMenuState() {
       const nextTargets = snapshotTargets(value.targets ?? []);
       const nextSelectedId = typeof value.selectedId === 'string' ? value.selectedId : null;
       const nextMode = checkedMode(value.selectionMode ?? (nextSelectedId && nextSelectedId !== 'auto' ? 'manual' : 'auto'));
+      const nextEditState = snapshotEditState(value.editState);
+      editState = nextEditState;
       targets = nextTargets; selectedId = nextSelectedId; selectionMode = nextMode;
       scene = value.scene && typeof value.scene === 'object' ? {trees: value.scene.trees} : {};
       category = 'root'; page = 0;
       return view();
     },
     updateTargets(value) {targets = snapshotTargets(value); return view();},
+    updateEditState(value) {editState = snapshotEditState(value); return view();},
     updateMode(mode, nextSelectedId = selectedId) {
       const nextMode = checkedMode(mode);
       if (nextSelectedId !== null && (typeof nextSelectedId !== 'string' || !nextSelectedId)) throw new TypeError('Invalid selected gesture target.');
@@ -86,7 +156,7 @@ export function createGestureMenuState() {
     },
     view,
     activate(key) {
-      const current = view(), item = [...current.modeItems, ...current.items, ...current.footer].find(candidate => candidate.key === key);
+      const current = view(), item = [...current.modeItems, ...current.editItems, ...current.items, ...current.footer].find(candidate => candidate.key === key);
       if (!item || item.disabled) return null;
       if (item.type === 'category') {category = item.id; page = 0; return {type: 'navigate'};}
       if (item.type === 'nav') {
@@ -186,6 +256,7 @@ export function mountGestureMenu(root, {onSelect = () => {}, onAction = () => {}
     button.setAttribute('aria-label', item.label);
     button.setAttribute('aria-pressed', String(Boolean(item.selected)));
     button.disabled = Boolean(item.disabled);
+    if (item.reason) {button.setAttribute('title', item.reason); button.setAttribute('aria-description', item.reason);}
     button.addEventListener('click', () => activate(item.key));
     buttons.push(button);
     return button;
@@ -199,6 +270,15 @@ export function mountGestureMenu(root, {onSelect = () => {}, onAction = () => {}
     const modeSwitch = document.createElement('div'); modeSwitch.className = 'gesture-mode-switch';
     modeSwitch.setAttribute('role', 'group'); modeSwitch.setAttribute('aria-label', '选择方式');
     for (const item of view.modeItems) modeSwitch.appendChild(makeButton(item));
+    const editSummary = document.createElement('p'); editSummary.className = 'gesture-edit-summary';
+    editSummary.setAttribute('aria-live', 'polite');
+    for (const [className, label] of [['gesture-edit-selected', `选中：${view.editState.selectedLabel || '未选择可编辑对象'}`],
+      ['gesture-edit-clipboard', `剪贴板：${view.editState.clipboardLabel || '空'}`]]) {
+      const span = document.createElement('span'); span.className = className; span.textContent = label; editSummary.appendChild(span);
+    }
+    const editShortcuts = document.createElement('div'); editShortcuts.className = 'gesture-edit-shortcuts';
+    editShortcuts.setAttribute('role', 'group'); editShortcuts.setAttribute('aria-label', '编辑选中对象');
+    for (const item of view.editItems) editShortcuts.appendChild(makeButton(item));
     const grid = document.createElement('div'); grid.className = 'gesture-menu-grid';
     for (const item of view.items) grid.appendChild(makeButton(item));
     if (!view.items.length) {
@@ -207,7 +287,7 @@ export function mountGestureMenu(root, {onSelect = () => {}, onAction = () => {}
     }
     const footer = document.createElement('div'); footer.className = 'gesture-menu-footer';
     for (const item of view.footer) footer.appendChild(makeButton(item));
-    root.replaceChildren(title, modeSwitch, grid, footer);
+    root.replaceChildren(title, modeSwitch, editSummary, editShortcuts, grid, footer);
   }
   return Object.freeze({
     open(options = {}) {
@@ -218,6 +298,7 @@ export function mountGestureMenu(root, {onSelect = () => {}, onAction = () => {}
     isOpen: () => opened,
     resetDwell,
     updateTargets(targets) {model.updateTargets(targets); if (opened) render();},
+    updateEditState(state) {model.updateEditState(state); if (opened) render();},
     updateMode(mode, selectedId) {model.updateMode(mode, selectedId); if (opened) render();},
     update(cursor, timestampMs, {enabled = true} = {}) {
       const validCursor = clientPoint(cursor);

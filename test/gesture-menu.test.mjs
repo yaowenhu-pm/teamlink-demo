@@ -27,7 +27,10 @@ function allItems(state) {
     const view = state.view();
     assert.ok(view.items.length + view.footer.length <= 8, 'content and navigation stay bounded');
     assert.equal(view.modeItems.length, 2, 'both selection modes are available on every page');
-    assert.ok(view.modeItems.length + view.items.length + view.footer.length <= 10, 'fixed controls do not crowd the menu');
+    assert.equal(view.editItems.length, 3, 'copy, paste, and delete remain available on every page');
+    assert.ok(view.modeItems.length + view.editItems.length + view.items.length + view.footer.length <= 13, 'content, navigation, and fixed controls remain bounded');
+    const keys=[...view.modeItems,...view.editItems,...view.items,...view.footer].map(item=>item.key);
+    assert.equal(new Set(keys).size,keys.length,'every measured button key is unique');
     items.push(...view.items);
     if (!view.footer.some(item => item.key === 'nav:next')) return items;
     state.activate('nav:next');
@@ -37,7 +40,7 @@ function allItems(state) {
 test('all categories are paginated while both selection modes remain fixed', () => {
   const state = createGestureMenuState();
   state.open({targets, selectedId: 'auto', scene: {trees: 3}});
-  assert.deepEqual(allItems(state).map(item => item.id), ['sun', 'tree', 'mountain', 'boat', 'bird',
+  assert.deepEqual(allItems(state).map(item => item.id), ['edit', 'sun', 'tree', 'mountain', 'boat', 'bird',
     'flower', 'cloud', 'leaf', 'environment', 'layers', 'actions']);
   assert.deepEqual(state.activate('mode:auto'), {type: 'mode', id: 'auto'});
   assert.deepEqual(state.activate('mode:manual'), {type: 'mode', id: 'manual'});
@@ -176,23 +179,31 @@ function fixture(callbacks = {}) {
   return {root, menu, buttons, layout, click};
 }
 
+function cursorFor(ui, key) {
+  const button = ui.buttons().find(item => item.dataset.menuKey === key);
+  assert.ok(button, `missing button ${key}`);
+  const r = button.rect;
+  return {x: (r.left + r.right) / 2, y: (r.top + r.bottom) / 2};
+}
+
 test('mounted menu supports client-pixel dwell navigation and closes before selection callback', () => {
   const selected = [], ui = fixture({onSelect: id => {assert.equal(ui.menu.isOpen(), false); selected.push(id);}});
   ui.menu.open({targets}); ui.layout();
   assert.equal(ui.root.hidden, false);
   assert.equal(ui.root.attributes.role, 'dialog');
-  const cursor = {x: 30, y: 210}; // after the two fixed modes: tree category
+  const cursor = cursorFor(ui, 'category:tree');
   for (let timestampMs = 0; timestampMs <= 500; timestampMs += 125) ui.menu.update(cursor, timestampMs, {enabled: true});
   ui.layout();
   assert.match(ui.root.children[0].textContent, /^树/u);
   assert.equal(ui.menu.isOpen(), true);
   const target = ui.buttons().find(button => button.dataset.menuKey === 'target:tree:0');
   assert.ok(target);
-  ui.menu.update({x: 30, y: 150}, 625);
-  ui.menu.update({x: 30, y: 150}, 750);
+  const targetCursor = cursorFor(ui, 'target:tree:0');
+  ui.menu.update(targetCursor, 625);
+  ui.menu.update(targetCursor, 750);
   assert.equal(target.dataset.dwell, '0.25');
   assert.equal(target.style['--dwell'], '0.25');
-  for (const timestampMs of [875, 1000, 1125]) ui.menu.update({x: 30, y: 150}, timestampMs);
+  for (const timestampMs of [875, 1000, 1125]) ui.menu.update(targetCursor, timestampMs);
   assert.deepEqual(selected, ['tree:0']);
   assert.equal(ui.root.hidden, true);
   assert.equal(target.dataset.dwell, '0');
@@ -201,10 +212,12 @@ test('mounted menu supports client-pixel dwell navigation and closes before sele
 test('gesture category navigation locks the old physical slot until an enabled cursor leaves', () => {
   const selected = [], ui = fixture({onSelect: id => selected.push(id)});
   ui.menu.open({targets}); ui.layout();
-  const cursor = {x: 30, y: 210}; // tree category becomes tree:1 in this slot
+  const cursor = cursorFor(ui, 'category:tree');
   for (const timestampMs of [0, 125, 250, 375, 500]) ui.menu.update(cursor, timestampMs);
   ui.layout();
   const originalTitle = ui.root.children[0].textContent;
+  const replacement = ui.buttons().find(button => contains(button.rect, cursor)).dataset.menuKey;
+  assert.match(replacement, /^target:tree:/u);
   assert.match(originalTitle, /^树/u);
   for (const timestampMs of [625, 750, 875, 1000, 1125, 1250]) {
     assert.equal(ui.menu.update(cursor, timestampMs).progress, 0);
@@ -225,7 +238,7 @@ test('gesture category navigation locks the old physical slot until an enabled c
   assert.equal(ui.root.children[0].textContent, originalTitle);
   ui.menu.update({x: 300, y: 210}, 5000); // valid exit releases the old rectangle
   for (const timestampMs of [5125, 5250, 5375, 5500, 5625]) ui.menu.update(cursor, timestampMs);
-  assert.deepEqual(selected, ['tree:1']);
+  assert.deepEqual(selected, [replacement.slice('target:'.length)]);
   assert.equal(ui.menu.isOpen(), false);
 });
 
@@ -249,7 +262,7 @@ test('gesture pagination cannot bounce or skip pages while the cursor stays in i
 
 test('closing and reopening clears the navigation region lock', () => {
   const ui = fixture(); ui.menu.open({targets}); ui.layout();
-  const cursor = {x: 30, y: 210};
+  const cursor = cursorFor(ui, 'category:tree');
   for (const timestampMs of [0, 125, 250, 375, 500]) ui.menu.update(cursor, timestampMs);
   ui.layout(); assert.match(ui.root.children[0].textContent, /^树/u);
   ui.menu.close(); ui.menu.open({targets}); ui.layout();
@@ -263,7 +276,7 @@ function contains(rect, cursor) {
 
 test('opening or disabling does not immediately activate; unchanged target updates preserve dwell', () => {
   const ui = fixture(); ui.menu.open({targets}); ui.layout();
-  const first = ui.buttons().find(button => button.dataset.menuKey === 'category:sun'), cursor = {x: 30, y: 150};
+  const first = ui.buttons().find(button => button.dataset.menuKey === 'category:sun'), cursor = cursorFor(ui, 'category:sun');
   assert.equal(ui.menu.update(cursor, 10000, {enabled: false}).progress, 0);
   assert.equal(ui.menu.update(cursor, 10125).progress, 0);
   ui.menu.update(cursor, 10250);
@@ -289,7 +302,7 @@ test('mouse selection and actions match gesture behavior, with safe external tex
   assert.equal(treeButton.attributes['aria-label'], label);
   ui.click('target:tree:0');
   assert.deepEqual(selected, ['tree:0']); assert.equal(ui.menu.isOpen(), false);
-  ui.menu.open({targets}); ui.layout();
+  ui.menu.open({targets, editState: {canUndo: true}}); ui.layout();
   ui.click('nav:next'); ui.click('nav:next'); ui.click('category:actions');
   ui.click('action:undo');
   assert.deepEqual(actions, ['undo']); assert.equal(ui.menu.isOpen(), false);
@@ -379,4 +392,106 @@ test('a held mode button cannot repeat after its callback rebuilds the selected 
   for (const timestampMs of [4000, 4125, 4250, 4375, 4500]) ui.menu.update(next, timestampMs);
   assert.deepEqual(modes, ['manual', 'auto']);
   assert.equal(ui.menu.isOpen(), true);
+});
+
+
+const editable = Object.freeze({selectedLabel: '帆船 1', clipboardLabel: '帆船副本',
+  canCopy: true, canCut: true, canPaste: true, canDuplicate: true, canDelete: true, canUndo: true, canRedo: true});
+
+test('editing is the first root entry and fixed shortcuts work on every object page without duplicate keys', () => {
+  const state=createGestureMenuState();state.open({targets,editState:editable});
+  assert.equal(state.view().items[0].key,'category:edit');
+  for(const kind of ['edit','sun','tree','boat','flower','cloud','leaf','environment','layers','actions']){
+    category(state,kind);
+    while(true){
+      const view=state.view();
+      assert.deepEqual(view.editItems.map(item=>[item.key,item.id,item.disabled]),[
+        ['quick:copy','copy',false],['quick:paste','paste',false],['quick:delete','delete',false],
+      ]);
+      assert.equal(view.editState.selectedLabel,'帆船 1');assert.equal(view.editState.clipboardLabel,'帆船副本');
+      const keys=[...view.modeItems,...view.editItems,...view.items,...view.footer].map(item=>item.key);
+      assert.equal(new Set(keys).size,keys.length);
+      if(!view.footer.some(item=>item.id==='next'))break;
+      state.activate('nav:next');
+    }
+  }
+  category(state,'edit');
+  assert.deepEqual(allItems(state).map(item=>item.id),['copy','cut','paste','duplicate','delete','undo','redo']);
+  assert.deepEqual(state.activate('action:redo'),{type:'action',id:'redo'});
+  assert.deepEqual(state.activate('quick:copy'),{type:'action',id:'copy'});
+});
+
+test('editing capabilities disable empty selection, empty clipboard, capacity, undo, and redo with reasons', () => {
+  const state=createGestureMenuState();state.open({targets});
+  assert.ok(state.view().editItems.every(item=>item.disabled));
+  assert.equal(state.activate('quick:paste'),null);
+  category(state,'edit');
+  assert.ok(allItems(state).every(item=>item.disabled));
+  state.updateEditState({canCopy:true,canCut:true,canDelete:true,canDuplicate:true,canPaste:true});
+  assert.ok(state.view().editItems.every(item=>item.disabled),'true flags cannot invent an object or clipboard');
+  state.updateEditState({...editable,canPaste:false,canUndo:false,canRedo:false,reason:{paste:'帆船数量已到上限。'}});
+  const paste=state.view().editItems.find(item=>item.id==='paste');
+  assert.equal(paste.disabled,true);assert.equal(paste.reason,'帆船数量已到上限。');assert.equal(state.activate('quick:paste'),null);
+  assert.equal(state.activate('action:undo'),null);assert.equal(state.activate('action:redo'),null);
+  category(state,'actions');assert.equal(state.view().items.find(item=>item.id==='undo').disabled,true,'legacy undo uses the same capability');
+  state.updateEditState({...editable,canCopy:false,canCut:false,canDelete:false,canDuplicate:false,reason:'环境图层不能作为独立对象编辑。'});
+  assert.equal(state.view().editItems.find(item=>item.id==='copy').reason,'环境图层不能作为独立对象编辑。');
+});
+
+test('edit state snapshots are safe, immutable, atomic, and retain navigation when updated', () => {
+  const state=createGestureMenuState(),source={...editable,reason:{paste:' 已满 '}};
+  state.open({targets,editState:source});category(state,'tree');state.activate('nav:next');state.activate('nav:next');
+  const before=state.view();source.selectedLabel='Changed';source.reason.paste='Changed';
+  assert.equal(before.editState.selectedLabel,'帆船 1');assert.equal(before.editState.reason.paste,'已满');
+  assert.equal(Object.isFrozen(before.editState),true);assert.equal(Object.isFrozen(before.editState.reason),true);
+  const next=state.updateEditState({...editable,clipboardLabel:'另一艘船',canRedo:false});
+  assert.equal(next.category,before.category);assert.equal(next.page,before.page);assert.equal(next.editState.clipboardLabel,'另一艘船');
+  let getterCalls=0;
+  const hostile=Object.defineProperty({},'canCopy',{enumerable:true,get(){getterCalls++;throw Error('getter executed');}});
+  const badReason=Object.defineProperty({},'paste',{enumerable:true,get(){getterCalls++;throw Error('reason getter executed');}});
+  for(const invalid of [null,[],{canCopy:1},{selectedLabel:{}},{reason:[]},{reason:{unknown:'no'}},{reason:badReason},hostile,{unknown:'field'}]){
+    assert.throws(()=>state.updateEditState(invalid),TypeError);assert.deepEqual(state.view(),next);
+  }
+  assert.equal(getterCalls,0);
+});
+
+test('shortcut mouse and dwell actions close before callback and disabled actions cannot fire', () => {
+  const actions=[],ui=fixture({onAction:id=>{assert.equal(ui.menu.isOpen(),false);actions.push(id);}});
+  ui.menu.open({targets,editState:editable});ui.layout();ui.click('quick:copy');
+  assert.deepEqual(actions,['copy']);assert.equal(ui.menu.isOpen(),false);
+  ui.menu.open({targets,editState:{...editable,canPaste:false,reason:{paste:'已满'}}});ui.layout();
+  const paste=ui.buttons().find(button=>button.dataset.menuKey==='quick:paste'),cursor=cursorFor(ui,'quick:paste');
+  assert.equal(paste.disabled,true);assert.equal(paste.attributes.title,'已满');assert.equal(paste.attributes['aria-description'],'已满');
+  paste.click();for(const timestamp of [0,125,250,375,500])assert.equal(ui.menu.update(cursor,timestamp).triggered,false);
+  assert.deepEqual(actions,['copy']);
+  ui.menu.updateEditState(editable);ui.layout();
+  const enabledCursor=cursorFor(ui,'quick:paste');
+  for(const timestamp of [625,750,875,1000,1125])ui.menu.update(enabledCursor,timestamp);
+  assert.deepEqual(actions,['copy','paste']);assert.equal(ui.menu.isOpen(),false);
+  ui.menu.open({targets,editState:editable});ui.layout();ui.click('category:edit');
+  ui.click('action:cut');assert.deepEqual(actions,['copy','paste','cut']);
+});
+
+test('equivalent edit state updates keep DOM and dwell, while real changes keep the current page', () => {
+  const ui=fixture();ui.menu.open({targets,editState:{...editable,reason:{copy:'A',paste:'B'}}});ui.layout();
+  ui.click('category:tree');ui.click('nav:next');const title=ui.root.children[0].textContent;
+  const button=ui.buttons().find(item=>item.dataset.menuKey==='quick:copy'),cursor=cursorFor(ui,'quick:copy');
+  ui.menu.update(cursor,0);ui.menu.update(cursor,125);
+  ui.menu.updateEditState({...editable,reason:{paste:'B',copy:'A'}});
+  assert.equal(ui.buttons().find(item=>item.dataset.menuKey==='quick:copy'),button,'semantically identical data does not replace measured nodes');
+  assert.equal(ui.menu.update(cursor,250).progress,.5);
+  ui.menu.updateEditState({...editable,clipboardLabel:'新副本'});ui.layout();
+  assert.equal(ui.root.children[0].textContent,title);
+  const replacement=ui.buttons().find(item=>item.dataset.menuKey==='quick:copy');assert.notEqual(replacement,button);
+  assert.equal(replacement.dataset.dwell,'0');assert.equal(ui.menu.update(cursor,375).progress,0);
+});
+
+test('editing summary renders labels as literal text and contains no clipboard payload', () => {
+  const label='<img src=x onerror=alert(1)>',ui=fixture();ui.menu.open({targets,editState:{...editable,selectedLabel:label,clipboardLabel:'<svg onload=alert(2)>'}});ui.layout();
+  const summary=ui.root.children.find(child=>child.className==='gesture-edit-summary');
+  assert.ok(summary);assert.equal(summary.children[0].textContent,`选中：${label}`);
+  assert.equal(summary.children[1].textContent,'剪贴板：<svg onload=alert(2)>');
+  const shortcuts=ui.root.children.find(child=>child.className==='gesture-edit-shortcuts');
+  assert.equal(shortcuts.attributes.role,'group');assert.equal(shortcuts.attributes['aria-label'],'编辑选中对象');
+  assert.deepEqual(shortcuts.children.map(button=>button.dataset.menuKey),['quick:copy','quick:paste','quick:delete']);
 });
