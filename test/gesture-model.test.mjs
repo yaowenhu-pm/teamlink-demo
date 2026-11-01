@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {PinchTracker, createHourDrag, createObjectDrag} from '../web/gesture-model.mjs';
+import {PinchTracker, GestureTargetTracker, SelectorGestureTracker, createHourDrag, createObjectDrag} from '../web/gesture-model.mjs';
 
 function hand({x = .5, y = .5, ratio = .7, scale = 1} = {}) {
   const points = Array.from({length: 21}, () => ({x, y}));
@@ -141,6 +141,266 @@ test('bad normalized input, invalid viewport/time and degenerate palms never emi
   tracker.update(frame(32, {ratio: .2}));
   assert.equal(tracker.update(frame(16)).phase, 'cancel', 'time moving backwards cancels');
   assert.throws(() => new PinchTracker({closeRatio: .5, openRatio: .4}), RangeError);
+});
+
+test('hover targets must dwell continuously before replacing a stable selection', () => {
+  const tracker = new GestureTargetTracker();
+  const hover = (timestampMs, targetId) => tracker.update({timestampMs, targetId});
+  assert.equal(hover(0, 'sun').selectedTargetId, null);
+  near(hover(90, 'sun').hoverProgress, .5);
+  assert.equal(hover(179, 'sun').selectedTargetId, null);
+  assert.equal(hover(180, 'sun').selectedTargetId, 'sun');
+  const candidate = hover(200, 'tree');
+  assert.equal(candidate.selectedTargetId, 'sun');
+  assert.equal(candidate.changed, false);
+  hover(300, 'sun');
+  hover(350, 'tree');
+  assert.equal(hover(529, 'tree').selectedTargetId, 'sun', 'candidate changes restart the dwell');
+  const selected = hover(530, 'tree');
+  assert.equal(selected.selectedTargetId, 'tree');
+  assert.equal(selected.changed, true);
+  assert.equal(hover(550, null).selectedTargetId, 'tree', 'empty background preserves the stable selection');
+  hover(600, 'sun');
+  hover(650, null);
+  assert.equal(hover(780, 'sun').hoverProgress, 0, 'background interrupts the pending dwell');
+});
+
+test('a pinch immediately locks the nearest candidate through moves and release', () => {
+  const tracker = new GestureTargetTracker();
+  tracker.update({timestampMs: 0, targetId: 'sun'});
+  tracker.update({timestampMs: 180, targetId: 'sun'});
+  const start = tracker.update({timestampMs: 200, targetId: 'tree', phase: 'start'});
+  assert.equal(start.selectedTargetId, 'tree', 'a new nearest candidate need not finish a dwell before grabbing');
+  assert.equal(start.lockedTargetId, 'tree');
+  assert.equal(start.targetId, 'tree');
+  assert.equal(tracker.update({timestampMs: 216, targetId: 'house', phase: 'move'}).targetId, 'tree');
+  assert.equal(tracker.update({timestampMs: 232, targetId: null, phase: 'move'}).lockedTargetId, 'tree');
+  const end = tracker.update({timestampMs: 248, targetId: 'house', phase: 'end'});
+  assert.equal(end.targetId, 'tree', 'the release returns the same target for committing');
+  assert.equal(end.lockedTargetId, null);
+  assert.equal(end.selectedTargetId, 'tree');
+  assert.equal(tracker.update({timestampMs: 264, targetId: 'house'}).selectedTargetId, 'tree');
+  assert.equal(tracker.update({timestampMs: 444, targetId: 'house'}).selectedTargetId, 'house');
+});
+
+test('target locking accepts zero IDs, uses the stable fallback, and cancels without a release target', () => {
+  const tracker = new GestureTargetTracker({hoverMs: 0});
+  assert.equal(tracker.update({timestampMs: 0, targetId: 0}).selectedTargetId, 0);
+  assert.equal(tracker.update({timestampMs: 16, phase: 'start'}).targetId, 0);
+  assert.equal(tracker.update({timestampMs: 32, phase: 'cancel'}).targetId, null);
+  assert.equal(tracker.update({timestampMs: 48, phase: 'start'}).targetId, null);
+  assert.equal(tracker.update({timestampMs: 64, targetId: 'tree', phase: 'move'}).targetId, null, 'a missing start target cannot jump to a new object');
+  assert.equal(tracker.update({timestampMs: 80, targetId: 'tree', phase: 'end'}).targetId, null);
+  assert.equal(tracker.cancel('disabled').selectedTargetId, null);
+});
+
+test('invalid target frames, gaps, and impossible pinch transitions clear selection and locks', () => {
+  for (const invalid of [null, {}, {timestampMs: NaN}, {timestampMs: -1},
+    {timestampMs: 32, targetId: ''}, {timestampMs: 32, targetId: {}}, {timestampMs: 32, targetId: Infinity},
+    {timestampMs: 32, phase: 'unknown'}, {timestampMs: 32, phase: 'hover'},
+    {timestampMs: 32, phase: 'start'}, {timestampMs: 0, phase: 'move'},
+    {timestampMs: 300, phase: 'move'}, {timestampMs: 32, phase: 'lost'}]) {
+    const tracker = new GestureTargetTracker({hoverMs: 0});
+    tracker.update({timestampMs: 0, targetId: 'sun'});
+    tracker.update({timestampMs: 16, targetId: 'sun', phase: 'start'});
+    const result = tracker.update(invalid);
+    assert.equal(result.targetId, null);
+    assert.equal(result.selectedTargetId, null);
+    assert.equal(result.lockedTargetId, null);
+    assert.ok(result.reason);
+  }
+  for (const phase of ['move', 'end']) {
+    assert.equal(new GestureTargetTracker().update({timestampMs: 0, targetId: 'sun', phase}).reason, 'invalid-transition');
+  }
+  for (const options of [{hoverMs: -1}, {hoverMs: Infinity}, {maxGapMs: 0}, {maxGapMs: NaN}]) {
+    assert.throws(() => new GestureTargetTracker(options), RangeError);
+  }
+});
+
+function selectorHand({pose = 'v', angle = 0, scale = 1, mirror = false, aspect = 1} = {}) {
+  const points = [
+    [.5, .8], [.43, .76], [.38, .73], [.36, .7], [.34, .67],
+    [.42, .62], [.4, .46], [.38, .36], [.36, .27],
+    [.49, .59], [.5, .43], [.51, .32], [.52, .22],
+    [.56, .61], [.58, .48], [.6, .56], [.57, .61],
+    [.63, .65], [.66, .55], [.67, .62], [.64, .67],
+  ];
+  if (pose === 'open') {
+    points[14] = [.58, .47]; points[15] = [.6, .37]; points[16] = [.62, .28];
+    points[18] = [.67, .52]; points[19] = [.7, .43]; points[20] = [.73, .35];
+  } else if (pose === 'fist') {
+    points[6] = [.4, .48]; points[7] = [.4, .56]; points[8] = [.43, .64];
+    points[10] = [.49, .45]; points[11] = [.49, .53]; points[12] = [.5, .61];
+  } else if (pose === 'point') {
+    points[10] = [.49, .45]; points[11] = [.49, .53]; points[12] = [.5, .61];
+  } else if (pose === 'pinch') {
+    points[4] = [.36, .29];
+  } else if (pose === 'unseparated') {
+    points[6] = [.45, .46]; points[7] = [.47, .34]; points[8] = [.49, .23];
+  }
+  return points.map(([x, y]) => {
+    const dx = (x - .5) * scale * (mirror ? -1 : 1), dy = (y - .5) * scale;
+    return {x: .5 + (dx * Math.cos(angle) - dy * Math.sin(angle)) / aspect,
+      y: .5 + dx * Math.sin(angle) + dy * Math.cos(angle)};
+  });
+}
+const selectorFrame = (timestampMs, options = {}) => ({timestampMs, width: 800 * (options.aspect ?? 1), height: 800,
+  landmarks: selectorHand(options)});
+const armSelector = (tracker, start = 0) => {
+  tracker.update(selectorFrame(start, {pose: 'open'}));
+  return tracker.update(selectorFrame(start + 160, {pose: 'open'}));
+};
+const holdSelector = (tracker, start = 176, options = {}) => {
+  let result;
+  for (let elapsed = 0; elapsed <= 500; elapsed += 125) result = tracker.update(selectorFrame(start + elapsed, options));
+  return result;
+};
+
+test('a V must first release, then hold for 500ms, and cannot retrigger while held', () => {
+  const tracker = new SelectorGestureTracker();
+  for (let timestampMs = 0; timestampMs <= 625; timestampMs += 125) {
+    const result = tracker.update(selectorFrame(timestampMs));
+    assert.equal(result.triggered, false);
+    assert.equal(result.reason, 'release-to-arm');
+  }
+  assert.equal(armSelector(tracker, 641).ready, true);
+  const start = tracker.update(selectorFrame(817));
+  assert.equal(start.phase, 'holding');
+  assert.equal(start.progress, 0);
+  near(tracker.update(selectorFrame(942)).progress, .25);
+  tracker.update(selectorFrame(1067));
+  tracker.update(selectorFrame(1192));
+  assert.equal(tracker.update(selectorFrame(1316)).triggered, false);
+  const triggered = tracker.update(selectorFrame(1317));
+  assert.equal(triggered.phase, 'trigger');
+  assert.equal(triggered.triggered, true);
+  assert.equal(triggered.progress, 1);
+  for (let timestampMs = 1442; timestampMs < 2817; timestampMs += 125) {
+    assert.equal(tracker.update(selectorFrame(timestampMs)).triggered, false);
+  }
+});
+
+test('V geometry handles rotation, mirroring, hand size, and camera aspect ratio', () => {
+  for (const options of [{}, {angle: Math.PI / 2}, {angle: Math.PI}, {angle: -Math.PI / 3},
+    {mirror: true}, {scale: .5}, {scale: 1.4}, {aspect: 2}, {aspect: .75, mirror: true}]) {
+    const tracker = new SelectorGestureTracker();
+    armSelector(tracker);
+    assert.equal(holdSelector(tracker, 176, options).triggered, true, JSON.stringify(options));
+  }
+});
+
+test('an open hand, fist, point, pinch, or two unseparated fingers cannot open the selector', () => {
+  for (const pose of ['open', 'fist', 'point', 'pinch', 'unseparated']) {
+    const tracker = new SelectorGestureTracker();
+    armSelector(tracker);
+    const result = holdSelector(tracker, 176, {pose});
+    assert.equal(result.pose, false, pose);
+    assert.equal(result.triggered, false, pose);
+  }
+  const tracker = new SelectorGestureTracker();
+  armSelector(tracker);
+  const collapsed = selectorHand(); collapsed[7] = collapsed[6];
+  assert.equal(tracker.update({...selectorFrame(176), landmarks: collapsed}).pose, false, 'collapsed finger segments are ambiguous');
+});
+
+test('short pose interruptions restart the full hold and short release flickers do not rearm it', () => {
+  const tracker = new SelectorGestureTracker();
+  armSelector(tracker);
+  tracker.update(selectorFrame(176));
+  tracker.update(selectorFrame(301));
+  tracker.update(selectorFrame(426, {pose: 'open'}));
+  assert.equal(tracker.update(selectorFrame(442)).progress, 0);
+  tracker.update(selectorFrame(567));
+  tracker.update(selectorFrame(692));
+  tracker.update(selectorFrame(817));
+  assert.equal(tracker.update(selectorFrame(942)).triggered, true);
+  tracker.update(selectorFrame(958, {pose: 'open'}));
+  tracker.update(selectorFrame(1100, {pose: 'open'}));
+  assert.equal(tracker.update(selectorFrame(1110)).ready, false, 'a release shorter than 160ms cannot rearm');
+  assert.equal(tracker.update(selectorFrame(1235)).triggered, false);
+});
+
+test('release and cooldown both gate another trigger, and losing tracking cannot bypass cooldown', () => {
+  const tracker = new SelectorGestureTracker({cooldownMs: 1500});
+  armSelector(tracker);
+  assert.equal(holdSelector(tracker).triggered, true); // 676ms
+  tracker.cancel('no-hand');
+  armSelector(tracker, 692);
+  assert.equal(holdSelector(tracker, 868).triggered, false); // 1368ms
+  let result;
+  for (let timestampMs = 1493; timestampMs <= 2118; timestampMs += 125) result = tracker.update(selectorFrame(timestampMs));
+  assert.equal(result.reason, 'cooldown');
+  assert.equal(tracker.update(selectorFrame(2175)).triggered, false);
+  assert.equal(tracker.update(selectorFrame(2176)).triggered, true);
+  tracker.update(selectorFrame(2192, {pose: 'open'}));
+  assert.equal(tracker.update(selectorFrame(2352, {pose: 'open'})).ready, true);
+});
+
+test('pinching cancels a pending selector and requires a fresh non-V release', () => {
+  const tracker = new SelectorGestureTracker();
+  armSelector(tracker);
+  tracker.update(selectorFrame(176));
+  tracker.update(selectorFrame(301));
+  const pinching = tracker.update({...selectorFrame(426), pinching: true});
+  assert.equal(pinching.phase, 'idle');
+  assert.equal(pinching.reason, 'pinching');
+  assert.equal(pinching.ready, false);
+  assert.equal(tracker.update(selectorFrame(551)).phase, 'held');
+  assert.equal(holdSelector(tracker, 676).triggered, false);
+  armSelector(tracker, 1192);
+  assert.equal(holdSelector(tracker, 1368).triggered, true);
+});
+
+test('lost, uncertain, changed, or multiple hands discard the selector hold without triggering', () => {
+  for (const interrupt of [
+    {...selectorFrame(320), landmarks: null}, selectorFrame(600),
+    {...selectorFrame(320), hands: [selectorHand(), selectorHand()]},
+    {...selectorFrame(320), confidence: .64}, {...selectorFrame(320), handId: 'other'},
+    {...selectorFrame(320), timestampMs: 176},
+  ]) {
+    const tracker = new SelectorGestureTracker();
+    armSelector(tracker);
+    tracker.update(selectorFrame(176));
+    tracker.update(selectorFrame(301));
+    const result = tracker.update(interrupt);
+    assert.equal(result.phase, 'lost');
+    assert.equal(result.triggered, false);
+    assert.equal(result.progress, 0);
+    assert.equal(tracker.update(selectorFrame(700)).phase, 'held', 'a recovered V does not count as release');
+    assert.equal(holdSelector(tracker, 825).triggered, false);
+    armSelector(tracker, 1341);
+    assert.equal(holdSelector(tracker, 1517).triggered, true);
+  }
+});
+
+test('selector rejects malformed normalized landmarks, metadata, and timing', () => {
+  const bad = selectorHand(); bad[12].x = NaN;
+  const outside = selectorHand(); outside[5].y = 1.1;
+  const sparse = selectorHand(); delete sparse[4];
+  const flat = Array.from({length: 21}, () => ({x: .5, y: .5}));
+  const cases = [null, {}, {...selectorFrame(0), width: 0}, {...selectorFrame(0), height: Infinity},
+    {...selectorFrame(0), timestampMs: NaN}, {...selectorFrame(0), timestampMs: -1},
+    {...selectorFrame(0), confidence: NaN}, {...selectorFrame(0), confidence: 1.1},
+    {...selectorFrame(0), handId: {}}, {...selectorFrame(0), handId: Infinity},
+    {...selectorFrame(0), pinching: 'true'}, {...selectorFrame(0), landmarks: bad},
+    {...selectorFrame(0), landmarks: outside}, {...selectorFrame(0), landmarks: sparse},
+    {...selectorFrame(0), landmarks: flat}, {...selectorFrame(0), landmarks: [selectorHand()]},
+    {...selectorFrame(0), hands: []}, {...selectorFrame(0), hands: {}},
+  ];
+  for (const input of cases) {
+    const result = new SelectorGestureTracker().update(input);
+    assert.equal(result.phase, 'lost');
+    assert.equal(result.triggered, false);
+    assert.equal(result.ready, false);
+    assert.equal(result.progress, 0);
+  }
+  const tracker = new SelectorGestureTracker();
+  tracker.update({...selectorFrame(0), hands: [selectorHand({pose: 'open'})]});
+  assert.equal(tracker.update({...selectorFrame(160), hands: [selectorHand({pose: 'open'})]}).ready, true, 'one-hand array input is supported');
+  for (const options of [{holdMs: 0}, {holdMs: NaN}, {releaseMs: 0}, {cooldownMs: -1},
+    {maxGapMs: 0}, {minConfidence: 1.1}, {minPalmSize: 0}]) {
+    assert.throws(() => new SelectorGestureTracker(options), RangeError);
+  }
 });
 
 test('hour dragging preserves the grab offset, clamps 0–24, and cancels without returning a saved hour', () => {

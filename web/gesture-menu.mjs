@@ -1,0 +1,236 @@
+const PAGE_SIZE = 5; // Including the three navigation buttons, at most eight.
+const CATEGORIES = Object.freeze([
+  ['sun', '太阳 / 月亮'], ['tree', '树'], ['mountain', '山'], ['boat', '船'],
+  ['bird', '鸟'], ['flower', '花'], ['cloud', '云'], ['leaf', '落叶'],
+  ['environment', '环境'], ['layers', '图层'], ['actions', '操作'],
+]);
+const ENVIRONMENT_IDS = new Set(['rain', 'wind', 'sky', 'water', 'branches', 'flowers', 'clouds']);
+const LEAF_IDS = new Set(['leaf', 'leafOrigin', 'leafTarget']);
+const ACTIONS = Object.freeze([
+  ['undo', '撤销'], ['reset', '恢复默认'], ['motion', '动画开关'],
+  ['music', '音乐开关'], ['immersive', '沉浸画布'], ['close', '关闭菜单'],
+]);
+const clientPoint = point => point && Number.isFinite(point.x) && Number.isFinite(point.y);
+const measuredRect = value => value && [value.left, value.top, value.right, value.bottom].every(Number.isFinite)
+  && value.right > value.left && value.bottom > value.top;
+const containsPoint = (rect, point) => point.x >= rect.left && point.x < rect.right
+  && point.y >= rect.top && point.y < rect.bottom;
+
+function snapshotTargets(value) {
+  if (!Array.isArray(value)) throw new TypeError('Gesture menu targets must be an array.');
+  const seen = new Set();
+  return value.flatMap(target => {
+    if (!target || typeof target.id !== 'string' || !target.id || seen.has(target.id)) return [];
+    seen.add(target.id);
+    return [{id: target.id, label: typeof target.label === 'string' && target.label ? target.label : target.id,
+      kind: typeof target.kind === 'string' ? target.kind : ''}];
+  });
+}
+
+/** Pure menu inventory and navigation. No DOM, camera, network, or callbacks. */
+export function createGestureMenuState() {
+  let targets = [], selectedId = null, scene = {}, category = 'root', page = 0;
+  const targetItem = target => ({key: `target:${target.id}`, label: target.label, type: 'select', id: target.id,
+    selected: selectedId === target.id});
+  function items() {
+    if (category === 'root') return [
+      ...CATEGORIES.map(([id, label]) => ({key: `category:${id}`, label, type: 'category', id})),
+      {key: 'select:auto', label: '自动拾取', type: 'select', id: 'auto', selected: selectedId === 'auto' || selectedId === null},
+    ];
+    if (category === 'actions') return ACTIONS.map(([id, label]) => ({key: `action:${id}`, label, type: 'action', id}));
+    let filtered;
+    if (category === 'leaf') filtered = targets.filter(target => LEAF_IDS.has(target.id));
+    else if (category === 'environment') filtered = targets.filter(target => target.id.startsWith('count:') || ENVIRONMENT_IDS.has(target.id));
+    else if (category === 'layers') filtered = targets.filter(target => target.id.startsWith('decor:') && !/^decor:(?:flower|cloud):/u.test(target.id));
+    else filtered = targets.filter(target => target.kind === category
+      || (category === 'sun' && target.id === 'sun'));
+    if (['tree','mountain','boat','bird','flower','cloud'].includes(category)) filtered.sort((a,b)=>a.id.localeCompare(b.id,undefined,{numeric:true}));
+    const result = filtered.map(targetItem);
+    if (category === 'leaf') result.push({key: 'action:draw:leaf', label: '手绘落叶路线', type: 'action', id: 'draw:leaf',
+      disabled: scene.trees === 0 && !targets.some(target => LEAF_IDS.has(target.id))});
+    return result;
+  }
+  function view() {
+    const all = items(), pageCount = Math.max(1, Math.ceil(all.length / PAGE_SIZE));
+    page = Math.min(Math.max(0, page), pageCount - 1);
+    const footer = [];
+    if (page > 0) footer.push({key: 'nav:previous', label: '上一页', type: 'nav', id: 'previous'});
+    if (page < pageCount - 1) footer.push({key: 'nav:next', label: '下一页', type: 'nav', id: 'next'});
+    footer.push(category === 'root'
+      ? {key: 'action:close', label: '关闭菜单', type: 'action', id: 'close'}
+      : {key: 'nav:back', label: '返回分类', type: 'nav', id: 'back'});
+    return {category, title: category === 'root' ? '选择要控制的内容'
+      : CATEGORIES.find(([id]) => id === category)?.[1] ?? '选择内容',
+    page, pageCount, items: all.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE), footer};
+  }
+  return Object.freeze({
+    open(value = {}) {
+      if (!value || typeof value !== 'object') throw new TypeError('Gesture menu options must be an object.');
+      targets = snapshotTargets(value.targets ?? []);
+      selectedId = typeof value.selectedId === 'string' ? value.selectedId : null;
+      scene = value.scene && typeof value.scene === 'object' ? {trees: value.scene.trees} : {};
+      category = 'root'; page = 0;
+      return view();
+    },
+    updateTargets(value) {targets = snapshotTargets(value); return view();},
+    view,
+    activate(key) {
+      const current = view(), item = [...current.items, ...current.footer].find(candidate => candidate.key === key);
+      if (!item || item.disabled) return null;
+      if (item.type === 'category') {category = item.id; page = 0; return {type: 'navigate'};}
+      if (item.type === 'nav') {
+        if (item.id === 'back') {category = 'root'; page = 0;}
+        else page += item.id === 'next' ? 1 : -1;
+        return {type: 'navigate'};
+      }
+      return {type: item.type, id: item.id};
+    },
+  });
+}
+
+/** Pure time-based activation. A fired button must be left before it can fire again. */
+export function createGestureMenuDwell({holdMs = 500, maxGapMs = 250} = {}) {
+  if (![holdMs, maxGapMs].every(Number.isFinite) || holdMs <= 0 || maxGapMs <= 0) throw new RangeError('Invalid menu dwell options.');
+  let candidate = null, since = null, previousTime = null, blocked = null;
+  const reset = ({release = false} = {}) => {
+    candidate = null; since = null; previousTime = null;
+    if (release) blocked = null;
+  };
+  return Object.freeze({reset,
+    update(key, timestampMs, {enabled = true} = {}) {
+      if ((key !== null && (typeof key !== 'string' || !key)) || !Number.isFinite(timestampMs) || timestampMs < 0) {
+        reset(); return {key: null, progress: 0, triggered: false};
+      }
+      if (key !== blocked) blocked = null;
+      if (!enabled) {reset(); return {key: null, progress: 0, triggered: false};}
+      if (previousTime !== null && (timestampMs <= previousTime || timestampMs - previousTime > maxGapMs)) reset();
+      previousTime = timestampMs;
+      if (key === null || key === blocked) {
+        candidate = null; since = null;
+        return {key, progress: 0, triggered: false};
+      }
+      if (candidate !== key) {candidate = key; since = timestampMs;}
+      const progress = Math.min(1, (timestampMs - since) / holdMs);
+      if (progress === 1) {blocked = key; candidate = null; since = null;}
+      return {key, progress, triggered: progress === 1};
+    },
+  });
+}
+
+/**
+ * Mount into an existing panel. Cursor x/y are viewport client pixels, matching
+ * getBoundingClientRect(), not scene-normalized coordinates. update returns the
+ * dwell feedback. enabled=false clears progress while preserving the held-button
+ * latch. Gesture navigation also locks the old button's physical rectangle until
+ * a valid enabled cursor leaves it, preventing a new page from selecting whatever
+ * appears in the same slot. Gaps, missing cursors, and resetDwell preserve this
+ * lock; close/open clear it. Mouse clicks remain immediately available.
+ * Every external label is written with textContent, never parsed as HTML.
+ */
+export function mountGestureMenu(root, {onSelect = () => {}, onAction = () => {}} = {}) {
+  if (!root?.ownerDocument?.createElement || typeof root.replaceChildren !== 'function'
+    || typeof onSelect !== 'function' || typeof onAction !== 'function') throw new TypeError('Gesture menu requires a DOM root and callbacks.');
+  const document = root.ownerDocument, model = createGestureMenuState(), dwell = createGestureMenuDwell();
+  let opened = false, buttons = [], rendered = null, blockedRegion = null;
+  root.hidden = true;
+  root.setAttribute('role', 'dialog');
+  root.setAttribute('aria-label', '手势内容选择器');
+  root.setAttribute('aria-modal', 'false');
+
+  function clearProgress() {
+    for (const button of buttons) {
+      button.dataset.dwell = '0';
+      button.dataset.dwelling = 'false';
+      button.style.setProperty('--dwell', '0');
+    }
+  }
+  function resetDwell() {dwell.reset(); clearProgress();}
+  function close() {
+    opened = false; root.hidden = true; blockedRegion = null;
+    dwell.reset({release: true}); clearProgress();
+  }
+  function activate(key, {gesture = false, timestampMs = null} = {}) {
+    if (!opened) return;
+    // Capture before model navigation replaces the measured button nodes.
+    const rect = gesture && buttons.find(button => button.dataset.menuKey === key)?.getBoundingClientRect();
+    const event = model.activate(key);
+    if (!event) return;
+    if (event.type === 'navigate') {
+      if (measuredRect(rect)) blockedRegion = {left: rect.left, top: rect.top, right: rect.right, bottom: rect.bottom, lastTime: timestampMs};
+      render(); return;
+    }
+    close();
+    if (event.type === 'select') onSelect(event.id);
+    else if (event.type === 'action') onAction(event.id);
+  }
+  function makeButton(item) {
+    const button = document.createElement('button');
+    button.type = 'button'; button.className = 'gesture-menu-item';
+    button.dataset.menuKey = item.key;
+    button.dataset.dwell = '0'; button.dataset.dwelling = 'false';
+    button.style.setProperty('--dwell', '0');
+    button.textContent = item.label;
+    button.setAttribute('aria-label', item.label);
+    button.setAttribute('aria-pressed', String(Boolean(item.selected)));
+    button.disabled = Boolean(item.disabled);
+    button.addEventListener('click', () => activate(item.key));
+    buttons.push(button);
+    return button;
+  }
+  function render() {
+    const view = model.view(), signature = JSON.stringify(view);
+    if (signature === rendered) return;
+    resetDwell(); buttons = []; rendered = signature;
+    const title = document.createElement('h2'); title.className = 'title';
+    title.textContent = `${view.title}${view.pageCount > 1 ? ` · ${view.page + 1}/${view.pageCount}` : ''}`;
+    const grid = document.createElement('div'); grid.className = 'gesture-menu-grid';
+    for (const item of view.items) grid.appendChild(makeButton(item));
+    if (!view.items.length) {
+      const empty = document.createElement('p'); empty.className = 'gesture-menu-empty'; empty.textContent = '当前没有可选择的内容。';
+      grid.appendChild(empty);
+    }
+    const footer = document.createElement('div'); footer.className = 'gesture-menu-footer';
+    for (const item of view.footer) footer.appendChild(makeButton(item));
+    root.replaceChildren(title, grid, footer);
+  }
+  return Object.freeze({
+    open(options = {}) {
+      model.open(options); rendered = null; blockedRegion = null; dwell.reset({release: true});
+      opened = true; root.hidden = false; render();
+    },
+    close,
+    isOpen: () => opened,
+    resetDwell,
+    updateTargets(targets) {model.updateTargets(targets); if (opened) render();},
+    update(cursor, timestampMs, {enabled = true} = {}) {
+      const validCursor = clientPoint(cursor);
+      let hit = null;
+      if (opened && validCursor) hit = buttons.find(button => {
+        if (button.disabled || button.hidden) return false;
+        const rect = button.getBoundingClientRect();
+        return measuredRect(rect) && containsPoint(rect, cursor);
+      }) ?? null;
+      if (blockedRegion) {
+        const validTime = Number.isFinite(timestampMs) && timestampMs >= 0
+          && (blockedRegion.lastTime === null || timestampMs > blockedRegion.lastTime);
+        if (validTime) blockedRegion.lastTime = timestampMs;
+        if (opened && enabled === true && validCursor && validTime && !containsPoint(blockedRegion, cursor)) {
+          blockedRegion = null;
+          dwell.reset({release: true});
+        } else {
+          resetDwell();
+          return {key: hit?.dataset.menuKey ?? null, progress: 0, triggered: false};
+        }
+      }
+      const result = dwell.update(hit?.dataset.menuKey ?? null, timestampMs, {enabled: opened && enabled && Boolean(validCursor)});
+      clearProgress();
+      if (hit && result.key === hit.dataset.menuKey) {
+        hit.dataset.dwell = String(result.progress);
+        hit.dataset.dwelling = String(result.progress > 0);
+        hit.style.setProperty('--dwell', String(result.progress));
+      }
+      if (result.triggered) activate(result.key, {gesture: true, timestampMs});
+      return result;
+    },
+  });
+}

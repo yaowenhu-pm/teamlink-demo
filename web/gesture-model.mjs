@@ -99,6 +99,200 @@ export class PinchTracker {
   }
 }
 
+const validTargetId = value => value === null || (typeof value === 'string' && value.length > 0)
+  || (typeof value === 'number' && Number.isFinite(value));
+const targetPhases = new Set(['hover', 'start', 'move', 'end', 'cancel', 'lost']);
+
+/**
+ * Pure target selection; the caller supplies its nearest eligible scene target.
+ * Hover must remain on the same candidate for hoverMs before changing selection.
+ * A pinch start immediately takes the current candidate, or the stable selection
+ * when the current hit test is empty. The chosen target cannot change until end.
+ * On end, targetId is the released target and lockedTargetId is already null.
+ * cancel/lost clear all targets and never return a target to commit.
+ */
+export class GestureTargetTracker {
+  constructor({hoverMs = 180, maxGapMs = 250} = {}) {
+    if (![hoverMs, maxGapMs].every(Number.isFinite) || hoverMs < 0 || maxGapMs <= 0) {
+      throw new RangeError('Invalid gesture target options');
+    }
+    this.options = {hoverMs, maxGapMs};
+    this.cancel();
+  }
+
+  update(frame = {}) {
+    if (!frame || typeof frame !== 'object') return this.cancel('invalid-frame');
+    const {timestampMs, targetId = null, phase = 'hover'} = frame;
+    if (!Number.isFinite(timestampMs) || timestampMs < 0) return this.cancel('invalid-time');
+    if (!validTargetId(targetId)) return this.cancel('invalid-target');
+    if (!targetPhases.has(phase)) return this.cancel('invalid-phase');
+    if (phase === 'cancel' || phase === 'lost') return this.cancel(phase);
+    if (this.timestampMs !== null) {
+      if (timestampMs <= this.timestampMs) return this.cancel('non-monotonic-time');
+      if (timestampMs - this.timestampMs > this.options.maxGapMs) return this.cancel('frame-gap');
+    }
+    if ((this.active && (phase === 'start' || phase === 'hover'))
+      || (!this.active && (phase === 'move' || phase === 'end'))) return this.cancel('invalid-transition');
+    this.timestampMs = timestampMs;
+    const previous = this.selectedTargetId;
+    let effectiveTarget = this.selectedTargetId, hoverProgress = 0;
+    if (phase === 'start') {
+      this.active = true;
+      this.lockedTargetId = targetId ?? this.selectedTargetId;
+      this.selectedTargetId = this.lockedTargetId;
+      this.candidateTargetId = null;
+      this.candidateSince = null;
+      effectiveTarget = this.lockedTargetId;
+    } else if (this.active) {
+      effectiveTarget = this.lockedTargetId;
+      if (phase === 'end') {
+        this.active = false;
+        this.lockedTargetId = null;
+      }
+    } else if (targetId === null) {
+      this.candidateTargetId = null;
+      this.candidateSince = null;
+    } else {
+      if (targetId !== this.candidateTargetId) {
+        this.candidateTargetId = targetId;
+        this.candidateSince = timestampMs;
+      }
+      hoverProgress = this.options.hoverMs === 0 ? 1 : clamp((timestampMs - this.candidateSince) / this.options.hoverMs);
+      if (hoverProgress === 1) this.selectedTargetId = targetId;
+      effectiveTarget = this.selectedTargetId;
+    }
+    return {targetId: effectiveTarget, selectedTargetId: this.selectedTargetId, lockedTargetId: this.lockedTargetId,
+      hoverProgress, changed: previous !== this.selectedTargetId, reason: null};
+  }
+
+  cancel(reason = 'cancelled') {
+    this.selectedTargetId = null;
+    this.lockedTargetId = null;
+    this.candidateTargetId = null;
+    this.candidateSince = null;
+    this.timestampMs = null;
+    this.active = false;
+    return {targetId: null, selectedTargetId: null, lockedTargetId: null, hoverProgress: 0, changed: false, reason};
+  }
+}
+
+// Geometry is independent of screen orientation and hand size. A conservative
+// V requires two straight, separated fingers and two visibly curled fingers;
+// ambiguous foreshortened hands simply do not activate the selector.
+const selectorPose = (landmarks, distance, palmWidth) => {
+  const vector = (a, b) => ({x: b.x - a.x, y: b.y - a.y});
+  const aligned = (a, b, c) => {
+    const u = vector(a, b), v = vector(b, c);
+    return (u.x * v.x + u.y * v.y) / (Math.hypot(u.x, u.y) * Math.hypot(v.x, v.y)) >= .6;
+  };
+  const finger = (mcp, pip, dip, tip) => {
+    const points = [mcp, pip, dip, tip].map(index => landmarks[index]);
+    const segments = points.slice(1).map((point, index) => distance(points[index], point));
+    if (segments.some(length => length < palmWidth * .06)) return {straight: false, curled: false};
+    const reach = distance(points[0], points[3]), path = segments.reduce((sum, length) => sum + length, 0);
+    const tipFromWrist = distance(landmarks[0], points[3]), pipFromWrist = distance(landmarks[0], points[1]);
+    return {
+      straight: reach / path >= .86 && reach >= palmWidth * .75
+        && aligned(points[0], points[1], points[2]) && aligned(points[1], points[2], points[3])
+        && tipFromWrist >= pipFromWrist + palmWidth * .2,
+      curled: reach / path <= .78 && reach <= palmWidth * .85
+        && tipFromWrist <= pipFromWrist + palmWidth * .15,
+    };
+  };
+  return finger(5, 6, 7, 8).straight && finger(9, 10, 11, 12).straight
+    && finger(13, 14, 15, 16).curled && finger(17, 18, 19, 20).curled
+    && distance(landmarks[8], landmarks[12]) >= palmWidth * .55
+    && distance(landmarks[4], landmarks[8]) >= palmWidth * .6;
+};
+
+/**
+ * Hold a V for holdMs to open the target selector once. Input matches
+ * PinchTracker's frame, with optional pinching:boolean from that tracker.
+ * Initial appearance and tracking loss require a valid non-V release before
+ * arming. A held pose cannot repeat; releaseMs and cooldownMs must both pass.
+ * A pinch suppresses recognition and discards the pending hold. This tracker
+ * never changes PinchTracker's state or treats a lost hand as a release.
+ */
+export class SelectorGestureTracker {
+  constructor({holdMs = 500, releaseMs = 160, cooldownMs = 700, maxGapMs = 250,
+    minConfidence = .65, minPalmSize = .025} = {}) {
+    if (![holdMs, releaseMs, cooldownMs, maxGapMs, minConfidence, minPalmSize].every(Number.isFinite)
+      || holdMs <= 0 || releaseMs <= 0 || cooldownMs < 0 || maxGapMs <= 0
+      || minConfidence < 0 || minConfidence > 1 || minPalmSize <= 0 || minPalmSize > 1) {
+      throw new RangeError('Invalid selector gesture options');
+    }
+    this.options = {holdMs, releaseMs, cooldownMs, maxGapMs, minConfidence, minPalmSize};
+    this.lastTriggeredAt = null;
+    this.cancel();
+  }
+
+  update(frame = {}) {
+    if (!frame || typeof frame !== 'object') return this.cancel('invalid-frame');
+    const {timestampMs, width, height, confidence = 1, handId = 'single', pinching = false} = frame;
+    if (!Number.isFinite(timestampMs) || timestampMs < 0) return this.cancel('invalid-time');
+    if (this.timestampMs !== null) {
+      if (timestampMs <= this.timestampMs) return this.cancel('non-monotonic-time');
+      if (timestampMs - this.timestampMs > this.options.maxGapMs) return this.cancel('frame-gap');
+    }
+    if (![width, height].every(value => Number.isFinite(value) && value > 0)) return this.cancel('invalid-viewport');
+    if (!Number.isFinite(confidence) || confidence < 0 || confidence > 1) return this.cancel('invalid-confidence');
+    if (confidence < this.options.minConfidence) return this.cancel('low-confidence');
+    if (typeof pinching !== 'boolean') return this.cancel('invalid-pinch');
+    if (!['string', 'number'].includes(typeof handId) || (typeof handId === 'number' && !Number.isFinite(handId))) return this.cancel('invalid-hand');
+    let landmarks = frame.landmarks;
+    if (frame.hands !== undefined) {
+      if (!Array.isArray(frame.hands)) return this.cancel('invalid-hands');
+      if (frame.hands.length !== 1) return this.cancel(frame.hands.length ? 'multiple-hands' : 'no-hand');
+      landmarks = frame.hands[0];
+    }
+    if (!landmarks) return this.cancel('no-hand');
+    if (!Array.isArray(landmarks) || landmarks.length !== 21 || !Array.from(landmarks).every(validPoint)) return this.cancel('invalid-landmarks');
+    if (this.handId !== null && this.handId !== handId) return this.cancel('hand-changed');
+    const longest = Math.max(width, height), sx = width / longest, sy = height / longest;
+    const corrected = landmarks.map(point => ({x: point.x * sx, y: point.y * sy}));
+    const distance = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
+    const palmWidth = distance(corrected[5], corrected[17]);
+    if (palmWidth < this.options.minPalmSize || distance(corrected[0], corrected[9]) < this.options.minPalmSize / 2) return this.cancel('unstable-palm');
+    this.timestampMs = timestampMs;
+    this.handId = handId;
+    if (pinching) {
+      this.armed = false;
+      this.holdSince = null;
+      this.releaseSince = null;
+      return {phase: 'idle', triggered: false, progress: 0, ready: false, pose: false, reason: 'pinching'};
+    }
+    const pose = selectorPose(corrected, distance, palmWidth);
+    if (!pose) {
+      this.holdSince = null;
+      if (this.releaseSince === null) this.releaseSince = timestampMs;
+      if (timestampMs - this.releaseSince >= this.options.releaseMs) this.armed = true;
+      return {phase: 'idle', triggered: false, progress: 0, ready: this.armed, pose: false,
+        reason: this.armed ? null : 'release-to-arm'};
+    }
+    this.releaseSince = null;
+    if (!this.armed) return {phase: 'held', triggered: false, progress: 0, ready: false, pose: true, reason: 'release-to-arm'};
+    if (this.holdSince === null) this.holdSince = timestampMs;
+    const progress = clamp((timestampMs - this.holdSince) / this.options.holdMs);
+    const cooling = this.lastTriggeredAt !== null && timestampMs - this.lastTriggeredAt < this.options.cooldownMs;
+    if (progress === 1 && !cooling) {
+      this.lastTriggeredAt = timestampMs;
+      this.armed = false;
+      this.holdSince = null;
+      return {phase: 'trigger', triggered: true, progress: 1, ready: false, pose: true, reason: null};
+    }
+    return {phase: 'holding', triggered: false, progress, ready: true, pose: true, reason: cooling ? 'cooldown' : null};
+  }
+
+  cancel(reason = 'cancelled') {
+    this.timestampMs = null;
+    this.handId = null;
+    this.armed = false;
+    this.holdSince = null;
+    this.releaseSince = null;
+    return {phase: 'lost', triggered: false, progress: 0, ready: false, pose: false, reason};
+  }
+}
+
 /** Relative hour dragging preserves the initial cursor-to-sun grab offset. */
 export function createHourDrag({hoursPerWidth = 24} = {}) {
   if (!Number.isFinite(hoursPerWidth) || hoursPerWidth <= 0) throw new RangeError('Invalid hour drag scale');
