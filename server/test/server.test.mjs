@@ -313,6 +313,17 @@ test('readiness reports a SQLite failure without exposing its path or secrets', 
   } finally { await f.close(); }
 });
 
+test('local vision WASM is served with a streaming-compatible content type', async () => {
+  const f = await fixture();
+  try {
+    await writeFile(resolve(f.publicRoot, 'vision.wasm'), Buffer.from([0, 97, 115, 109, 1, 0, 0, 0]));
+    const response = await f.request('/vision.wasm');
+    assert.equal(response.status, 200);
+    assert.equal(response.headers.get('content-type'), 'application/wasm');
+    await WebAssembly.compileStreaming(response);
+  } finally { await f.close(); }
+});
+
 test('static media provides byte ranges, strong fingerprints, HEAD/304, legacy routes and no path/symlink escape', async () => {
   const f = await fixture();
   try {

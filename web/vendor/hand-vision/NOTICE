@@ -1,0 +1,18 @@
+MediaPipe Tasks Vision 1.2.0 and Hand Landmarker full float16 model version 1
+Copyright The MediaPipe Authors / Google LLC.
+Licensed under the Apache License, Version 2.0. See LICENSE.
+
+Upstream: https://github.com/google-ai-edge/mediapipe
+Web package: https://www.npmjs.com/package/@mediapipe/tasks-vision/v/1.2.0
+Model: https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task
+Model card: https://storage.googleapis.com/mediapipe-assets/Model%20Card%20Hand%20Tracking%20(Lite_Full)%20with%20Fairness%20Oct%202021.pdf
+The official model card, page 2, states Apache License, Version 2.0.
+
+The upstream npm archive contains no separate LICENSE or NOTICE file. LICENSE
+is reproduced from the MediaPipe source repository, including its supplemental
+notice. This attribution file was added by the TeamLink project; it is not an
+upstream NOTICE file. Original copyright and license comments in the vendored
+JavaScript are retained. Vendored runtime and model bytes are unmodified.
+
+loader.mjs is the TeamLink project's same-origin integration wrapper.
+manifest.json records public source URLs, byte counts, and SHA-256 digests.

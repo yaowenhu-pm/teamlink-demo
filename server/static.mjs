@@ -10,6 +10,7 @@ const TYPES = {
   '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.webp': 'image/webp', '.gif': 'image/gif',
   '.ico': 'image/x-icon', '.mp4': 'video/mp4', '.m4a': 'audio/mp4', '.webm': 'video/webm', '.woff': 'font/woff', '.woff2': 'font/woff2',
   '.txt': 'text/plain; charset=utf-8', '.zip': 'application/zip',
+  '.wasm': 'application/wasm',
 };
 export class HttpError extends Error {
   constructor(status, message) { super(message); this.status = status; }

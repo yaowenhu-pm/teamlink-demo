@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="description" content="TeamLink 摄像头小实验：张开手，捏合，再左右移动，亲手拨动太阳。">
+  <meta name="referrer" content="no-referrer">
+  <title>TeamLink · 伸手，拨动夕阳。</title>
+  <link rel="icon" href="/assets/teamlink-icon.png">
+  <link rel="stylesheet" href="/gesture/gesture.css">
+</head>
+<body>
+  <main id="gesture-stage" aria-label="本机摄像头手势实验">
+    <svg id="landscape" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 1000" preserveAspectRatio="xMidYMid slice" aria-label="可以用手势或鼠标调整太阳的风景"></svg>
+    <header class="lab-header">
+      <a class="brand" href="/"><img src="/assets/teamlink-symbol.webp" width="34" height="34" alt="">TeamLink <span>手势实验</span></a>
+      <div class="canvas-tools" role="toolbar" aria-label="实验控制">
+        <button id="reset-lab" type="button" title="恢复夕阳（R）">恢复夕阳</button>
+        <button id="undo-lab" type="button" disabled title="撤销（⌘/Ctrl+Z）">↶ 撤销</button>
+        <button id="fullscreen-lab" type="button" title="全屏（F）">↗ 全屏</button>
+      </div>
+    </header>
+    <div class="intro">
+      <p class="eyebrow">A small experiment. Just for play.</p>
+      <h1>伸手，<br>拨动夕阳。</h1>
+      <p>张开手让镜头看见，捏合拇指和食指，<br>再左右移动。天色，跟着你的手改变。</p>
+    </div>
+    <div id="hand-cursor" class="hand-cursor" hidden aria-hidden="true"><span></span></div>
+    <aside id="camera-preview" class="camera-preview" hidden aria-label="仅在本机处理的摄像头预览">
+      <video id="camera-video" autoplay muted playsinline></video>
+      <div class="camera-caption"><span class="camera-dot"></span><span>仅本机识别 · 不上传画面</span></div>
+    </aside>
+    <section class="experiment-panel" aria-label="开启手势实验">
+      <div class="panel-status"><span id="state-dot" class="state-dot"></span><p id="gesture-status" role="status" aria-live="polite">先开启摄像头，试着把太阳握在手里。</p><output id="hour-label" aria-label="当前时间">18:18</output></div>
+      <div class="panel-actions">
+        <button id="start-camera" class="primary" type="button">开启摄像头 <span aria-hidden="true">↗</span></button>
+        <button id="stop-camera" class="secondary" type="button" hidden>关闭摄像头</button>
+        <label class="hour-control"><span>也可拖动太阳，或调整这里</span><input id="hour-control" type="range" min="0" max="24" step="0.1" value="18.3" aria-label="手动调整太阳和时间"></label>
+      </div>
+      <p id="camera-note" class="panel-note">点击后请求相机权限。首次识别文件约 23 MB，推荐电脑浏览器体验。</p>
+      <p class="panel-footnote">本页是独立本机实验，不改动共享房间。<a href="/">回到共同创作 ↗</a></p>
+    </section>
+  </main>
+  <noscript>请开启 JavaScript 后体验；摄像头只在你主动点击后开启。</noscript>
+  <script type="module" src="/gesture/gesture.mjs"></script>
+</body>
+</html>

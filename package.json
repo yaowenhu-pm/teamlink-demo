@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "test": "node --test test/canvas-model.test.mjs test/collaboration-model.test.mjs test/shared-storage.test.mjs test/scene-model.test.mjs test/rooms.test.mjs test/interpret.test.mjs test/scene-code.test.mjs test/scene-layout.test.mjs test/motion-model.test.mjs test/music.test.mjs test/shortcut-model.test.mjs server/test/*.test.mjs",
+    "test": "node --test test/canvas-model.test.mjs test/collaboration-model.test.mjs test/shared-storage.test.mjs test/scene-model.test.mjs test/rooms.test.mjs test/interpret.test.mjs test/scene-code.test.mjs test/scene-layout.test.mjs test/motion-model.test.mjs test/music.test.mjs test/shortcut-model.test.mjs test/gesture-model.test.mjs server/test/*.test.mjs",
     "preview": "node server/index.mjs",
     "preview:sites": "wrangler dev --config wrangler.json --local --port 4328",
     "build": "node server/build.mjs",

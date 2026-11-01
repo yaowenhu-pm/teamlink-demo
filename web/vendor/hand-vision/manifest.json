@@ -1,0 +1,172 @@
+{
+  "schemaVersion": 1,
+  "retrievedAt": "2026-11-01",
+  "package": {
+    "name": "@mediapipe/tasks-vision",
+    "version": "1.2.0",
+    "releaseKind": "stable",
+    "latestStableTagCheckedAt": "2026-11-01",
+    "packageMetadataUrl": "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@1.2.0/package.json",
+    "npmUrl": "https://www.npmjs.com/package/@mediapipe/tasks-vision/v/1.2.0",
+    "canonicalArchiveUrl": "https://registry.npmjs.org/@mediapipe/tasks-vision/-/tasks-vision-1.2.0.tgz",
+    "downloadedArchiveVia": "https://registry.npmmirror.com/@mediapipe/tasks-vision/-/tasks-vision-1.2.0.tgz",
+    "registryMetadataVia": "https://registry.npmmirror.com/@mediapipe%2Ftasks-vision",
+    "archiveSha256": "535175845f4ef8509b0240a0831abe8bcb3fa882accda6d080a4ede562a50a71",
+    "archiveIntegrity": "sha512-7+dr9GbGyTtcuLh11wE5TOn4dNFRncIT9oAWs72620WX99KW5FfzF6rFJ/ChTgXG9vJ6dCiE9FrEEY4CnwPWKQ==",
+    "registryIntegrityVerified": true,
+    "license": "Apache-2.0"
+  },
+  "model": {
+    "name": "HandLandmarker full",
+    "quantization": "float16",
+    "version": "1",
+    "sourceUrl": "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task",
+    "modelCardUrl": "https://storage.googleapis.com/mediapipe-assets/Model%20Card%20Hand%20Tracking%20(Lite_Full)%20with%20Fairness%20Oct%202021.pdf",
+    "license": "Apache-2.0",
+    "licenseEvidence": "The official Hand Landmarker guide links the model card; its page 2 says LICENSED UNDER Apache License, Version 2.0.",
+    "googleStorageGeneration": "1682480004222387",
+    "googleStorageMd5Base64": "FTGEMOo4UWcP6ZFBFqnPrQ==",
+    "googleStorageMd5Verified": true,
+    "bundleEntries": [
+      "hand_detector.tflite",
+      "hand_landmarks_detector.tflite"
+    ],
+    "zipCrcVerified": true
+  },
+  "runtimeContract": {
+    "entry": "./loader.mjs",
+    "exports": [
+      "createHandLandmarker",
+      "HandLandmarker",
+      "FilesetResolver",
+      "handVisionAssets"
+    ],
+    "importPolicy": "Dynamically import the same-origin entry only when the visitor opts into the experiment. Do not statically bundle or preload it.",
+    "defaultOptions": {
+      "baseOptions": {
+        "modelAssetPath": "./hand_landmarker.task (resolved against import.meta.url)",
+        "delegate": "CPU"
+      },
+      "runningMode": "VIDEO",
+      "numHands": 1
+    },
+    "wrapperAssetPolicy": "createHandLandmarker accepts task options but pins baseOptions to the same-origin model and CPU. It never requests a camera stream.",
+    "wasmResolver": "FilesetResolver.forVisionTasks(new URL(\"./wasm\", import.meta.url).href); keep default useModule=false.",
+    "simdFiles": [
+      "wasm/vision_wasm_internal.js",
+      "wasm/vision_wasm_internal.wasm"
+    ],
+    "noSimdFiles": [
+      "wasm/vision_wasm_nosimd_internal.js",
+      "wasm/vision_wasm_nosimd_internal.wasm"
+    ],
+    "videoInference": "detectForVideo(videoElement, monotonicallyIncreasingTimestampInMilliseconds); skip repeated video.currentTime and throttle calls because inference is synchronous.",
+    "imageInference": "For fixture QA createHandLandmarker({runningMode:\"IMAGE\",numHands:2}) then detect(decodedImage).",
+    "teardown": "Call task.close(); stop every owned MediaStreamTrack separately.",
+    "mimeTypes": {
+      ".mjs": "text/javascript",
+      ".js": "text/javascript",
+      ".wasm": "application/wasm",
+      ".task": "application/octet-stream"
+    },
+    "unusedUpstreamFilesOmitted": [
+      "module-mode WASM pair (forVisionTasks useModule=true is not used)",
+      "CJS and UMD bundles",
+      "source maps",
+      "declaration files",
+      "upstream README"
+    ],
+    "visionWasmScope": "Official vision runtime contains shared vision calculators and both CPU/GPU code paths. There is no separate official hand-only WASM binary. No separate GPU, audio, gen-AI, or gesture-recognizer model is shipped.",
+    "mainBundleImpact": "No npm dependency or build configuration was changed."
+  },
+  "documentation": {
+    "webGuide": "https://developers.google.com/edge/mediapipe/solutions/vision/hand_landmarker/web_js",
+    "apiReference": "https://developers.google.com/edge/api/mediapipe/js/tasks-vision.handlandmarker",
+    "filesetResolverSource": "https://github.com/google-ai-edge/mediapipe/blob/68392c4d368d14186566256d80067d8fc146f5c9/mediapipe/tasks/web/core/fileset_resolver.ts",
+    "licenseSource": "https://raw.githubusercontent.com/google-ai-edge/mediapipe/68392c4d368d14186566256d80067d8fc146f5c9/LICENSE"
+  },
+  "verification": {
+    "performed": [
+      "npm archive SHA-512 matched registry integrity",
+      "model matched Google Storage MD5 and ZIP CRC",
+      "Node import and FilesetResolver default SIMD and simulated no-SIMD fallback filenames checked",
+      "loader syntax checked"
+    ],
+    "notPerformed": [
+      "Real camera permission or physical camera operation",
+      "End-to-end browser inference (belongs to integration QA)"
+    ]
+  },
+  "files": [
+    {
+      "path": "vision_bundle.mjs",
+      "bytes": 156344,
+      "sha256": "870da5cfc43bfcf2a8b0f14e8152dae8c7e701722e1191b0e592b94b81b4127a",
+      "sourceUrl": "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@1.2.0/vision_bundle.mjs",
+      "role": "Unmodified upstream runtime; extracted from integrity-verified npm archive."
+    },
+    {
+      "path": "wasm/vision_wasm_internal.js",
+      "bytes": 334128,
+      "sha256": "85c1a342be70427987f900969a5f26e17557351111364e6585e97fb03e93e108",
+      "sourceUrl": "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@1.2.0/wasm/vision_wasm_internal.js",
+      "role": "Unmodified upstream runtime; extracted from integrity-verified npm archive."
+    },
+    {
+      "path": "wasm/vision_wasm_internal.wasm",
+      "bytes": 14466654,
+      "sha256": "bcc13df22d3d69ec8cbe8e280989356d844ae00f4523eb82072d2484f44134dc",
+      "sourceUrl": "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@1.2.0/wasm/vision_wasm_internal.wasm",
+      "role": "Unmodified upstream runtime; extracted from integrity-verified npm archive."
+    },
+    {
+      "path": "wasm/vision_wasm_nosimd_internal.js",
+      "bytes": 333931,
+      "sha256": "e9b2b799e0f1078f5538b300a57835b823742c37e2646308a03f0f25b39fdcdc",
+      "sourceUrl": "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@1.2.0/wasm/vision_wasm_nosimd_internal.js",
+      "role": "Unmodified upstream runtime; extracted from integrity-verified npm archive."
+    },
+    {
+      "path": "wasm/vision_wasm_nosimd_internal.wasm",
+      "bytes": 12915401,
+      "sha256": "ed5e5e5812490bd90d6a440290845ff9e4c516f696847a28a0c0e0573470d469",
+      "sourceUrl": "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@1.2.0/wasm/vision_wasm_nosimd_internal.wasm",
+      "role": "Unmodified upstream runtime; extracted from integrity-verified npm archive."
+    },
+    {
+      "path": "hand_landmarker.task",
+      "bytes": 7819105,
+      "sha256": "fbc2a30080c3c557093b5ddfc334698132eb341044ccee322ccf8bcf3607cde1",
+      "sourceUrl": "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task",
+      "role": "Unmodified full float16 model bundle, version 1."
+    },
+    {
+      "path": "upstream-package.json",
+      "bytes": 1192,
+      "sha256": "bf558f63285c8b46b8a6ce6344f38453dcfec741e79dc2ebf124feac74a7288b",
+      "sourceUrl": "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@1.2.0/package.json",
+      "role": "Unmodified upstream package metadata; declares Apache-2.0."
+    },
+    {
+      "path": "LICENSE",
+      "bytes": 12331,
+      "sha256": "8707eef0533987efc5b155d64761eeb6e20793f50b9bd1a68dad1cf4719d0ed8",
+      "sourceUrl": "https://raw.githubusercontent.com/google-ai-edge/mediapipe/68392c4d368d14186566256d80067d8fc146f5c9/LICENSE",
+      "role": "Unmodified upstream license text."
+    },
+    {
+      "path": "loader.mjs",
+      "bytes": 1099,
+      "sha256": "d50764974fd17afaf33dfaf04f81a7b82410833d814bdfdd51d2e4171ddf91e5",
+      "role": "TeamLink integration wrapper; authored locally."
+    },
+    {
+      "path": "NOTICE",
+      "bytes": 1177,
+      "sha256": "65961bcb899f1f37812c47a8e9c056f3c88b31f160e720eb8bec2b8144b57fd3",
+      "role": "TeamLink attribution and redistribution record; authored locally."
+    }
+  ],
+  "runtimeBytes": 36026662,
+  "manifestNote": "manifest.json records other files and intentionally does not recursively hash itself."
+}
