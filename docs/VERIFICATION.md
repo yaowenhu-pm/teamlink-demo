@@ -1,3 +1,16 @@
+# TeamLink 独立摄像头手势小实验 · 2026-11-01（已发布）
+
+- 入口为 https://teamlink.yaowenhu.cn/gesture/ 。主动开启后，先张手再捏合，水平相对移动改变太阳与昼夜，松开确认；支持鼠标、滑杆、恢复、撤销、全屏和原曲音乐。本机场景独立，不创建或写入共享房间，不发送 AI 请求。
+- 官方 MediaPipe Tasks Vision 1.2.0 的运行文件、SIMD/noSIMD WASM 与手部模型全部同源托管。校验 npm SHA-512、官方模型 MD5/ZIP CRC 与逐文件 SHA-256，随附 LICENSE/NOTICE/manifest；公开手部测试图片只保留在忽略目录，未发布。
+- 浏览器初始相机关闭、未下载识别依赖。公开图片经 canvas.captureStream 输入真实 VIDEO 推理，识别单手并出现游标；生产 IMAGE 推理得到两只手、每手 21 个关键点。检测器使用 CPU，测得单次推理约 39–89 ms；这不代表真人视频的帧率或手感。
+- 拒绝授权显示明确错误且隐藏预览；授权迟到时关闭保持生效，返回的 tracks 全部 ended。epoch 防护覆盖迟到模型加载；丢手、换手、多手和超过 250 ms 的视频冻结取消未确认抓取。停止、后台、pagehide 清理相机与 detector。
+- 本地与生产的手动时间修改、恢复和撤销正常；原生全屏与原曲音乐通过，390px 视口无横向溢出。生产 HTTPS、getUserMedia 能力与摄像头权限策略可用。未开启真人摄像头，未验证真人捏合手感、实体手机或不同光线。
+- 完整 167 项模型、协议及 Node/SQLite 测试通过，语法、构建与差异检查通过。新增 WASM MIME 的真实 WebAssembly.compileStreaming 回归；主站 world `6d84d6892e78` 与 CSS `9251f6e45023` 保持不变。
+- 阿里云 release `20261101-gesture-v8` 新增 15 个前端运行文件并调整静态 WASM MIME；served SHA、主站资产、health/readiness 均通过。未改数据库结构、房间数据或其他站点。
+- 首载曾受 1 Mbps 实例带宽限制。本站 Nginx 增加 WASM 与 octet-stream gzip，真实 GET 解压后的 SHA 与源文件一致：SIMD WASM 14,466,654→4,270,861 B，模型 7,819,105→5,983,939 B。首次配置检查因 reload 后立即请求未见 gzip 自动回滚，第二次增加有界等待后通过；nginx -t、readiness 与主站指纹均正常。压缩后仍需下载约 10 MB，不承诺即时冷启动。
+
+---
+
 # TeamLink 黄色叶片与恢复默认 · 2026-11-01（已发布）
 
 - 树冠和单片落叶统一为金黄与浅金黄的大叶片，叶脉改为棕金色；昼夜变化不会再把这两类叶片染绿。
