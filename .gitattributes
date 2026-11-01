@@ -1,0 +1,2 @@
+# Preserve pinned third-party runtime bytes, including upstream whitespace.
+web/vendor/hand-vision/** -whitespace
