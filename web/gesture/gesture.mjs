@@ -17,8 +17,8 @@ let inputGeneration = 0, lastInputGeneration = -1, pointerSession = null;
 let pointerHeld = false, pointerId = null, pageFocused = document.hasFocus(), selectedObject = null;
 let stream = null, detector = null, frameId = null, epoch = 0, lastVideoTime = -1, lastInference = 0;
 let loadController = null, motionTime = 0, leafPhase = 0, previousFrame = performance.now(), lastPaint = 0, cameraState = 'off';
-const snapshot = () => ({scene, decorOffsets});
-function restore(value) { if (value) { scene = value.scene; decorOffsets = value.decorOffsets; targetsAt = -Infinity; } }
+const snapshot = () => ({scene, decorOffsets, leafPhase});
+function restore(value) { if (value) { scene = value.scene; decorOffsets = value.decorOffsets; if(Number.isFinite(value.leafPhase))leafPhase=value.leafPhase; targetsAt = -Infinity; } }
 function formatHour(hour) {
   const minutes = Math.round((hour % 24) * 60);
   return String(Math.floor(minutes / 60)).padStart(2, '0') + ':' + String(minutes % 60).padStart(2, '0');
@@ -224,7 +224,7 @@ function moveGesture(cursor) {
   if (activeTarget.id==='draw:leaf') {
     if (!drawPoints.length || Math.hypot(cursor.x-drawPoints.at(-1).x,cursor.y-drawPoints.at(-1).y)>.003) drawPoints.push({...cursor});
     if (drawPoints.length>512) drawPoints=drawPoints.filter((_,i)=>i%2===0);
-    scene=updateScene(gestureBefore.scene,drawLeafTrailPatch(gestureBefore.scene,drawPoints));leafPhase=0;
+    scene=updateScene(gestureBefore.scene,drawLeafTrailPatch(gestureBefore.scene,drawPoints));leafPhase=1;
   } else applyDrag(gestureBefore,activeTarget,grabStart,cursor);
   render();
 }
@@ -322,7 +322,7 @@ function handleFrame(result, now) {
   if ((frame.phase==='move'||frame.phase==='end')&&gestureBefore) moveGesture(frame.cursor);
   if (frame.phase==='end'&&gestureBefore) {
     const before=gestureBefore,label=activeTarget.label,wasDraw=activeTarget.id==='draw:leaf';
-    gestureBefore=null;activeTarget=null;grabStart=null;drawPoints=[];stage.classList.remove('gesture-grabbing');commit(before);
+    gestureBefore=null;activeTarget=null;grabStart=null;drawPoints=[];stage.classList.remove('gesture-grabbing');if(wasDraw)leafPhase=0;commit(before);
     status(wasDraw?'新落叶路线已保存。再画一条，会立即替换。':`${label}已保存。V 手势可以换一个对象。`);
   } else if (gestureBefore) status(activeTarget.id==='draw:leaf'?'捏合画出落叶路线，松开保存。':'握住了，移动调整；松开保存。');
   else status(frame.ready?(hit?`${hit.label}：捏合抓取。V 手势可切换对象。`:'抬手靠近物体，或比 V 选择对象。'):'先张开拇指和食指，再捏合。');
