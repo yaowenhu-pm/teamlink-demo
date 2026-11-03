@@ -4,6 +4,7 @@ import {mountLandscape} from './scene-renderer.mjs';
 import {mountCodePanel} from './code-panel.mjs';
 import {mountDirectEditor,defaultScenePatch,SHORTCUTS} from './direct-edit.mjs';
 import {mountLandscapeMusic} from './music.mjs';
+import {mountWorldGestures} from './world-gestures.mjs';
 const $=selector=>document.querySelector(selector),$$=selector=>[...document.querySelectorAll(selector)];
 const esc=value=>String(value??'').replace(/[&<>"']/g,char=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));
 if(location.hash.startsWith('#doc='))location.replace('/legacy/app/'+location.search+location.hash);
@@ -13,7 +14,7 @@ let selected=null,editBefore=null,leafCompare=null,phase=0,playing=true,lastFram
 let codePanel=null,codeBefore=null,codeDraft=false,roomConnection=null,connecting=true,shareUnavailable=false,shareError='',inviteCache='',expiryTimer,directEditor=null;
 const reduced=matchMedia('(prefers-reduced-motion: reduce)').matches;if(reduced)playing=false;
 let drawingTrajectory=false,motionTime=0,motionPlaying=!reduced;
-let backgroundMusic=null;
+let backgroundMusic=null,worldGestures=null,gestureSession=null,redoStack=[],historyAction=null;
 let drawingSnapshot=null,shortcutHelpFocus=null;
 try{const raw=localStorage.getItem(STORAGE);if(raw)scene=validateScene(JSON.parse(raw));}catch{}
 const hash=new URLSearchParams(location.hash.slice(1));
@@ -26,19 +27,22 @@ function saveLocal(){if(!room){try{localStorage.setItem(STORAGE,JSON.stringify(s
 function formatHour(hour){const total=Math.round((hour%24)*60);return String(Math.floor(total/60)).padStart(2,'0')+':'+String(total%60).padStart(2,'0');}
 function value(key,value){if(key==='hour')return formatHour(value);if(key==='rain'||key==='wind')return Math.round(value*100)+'%';if(key==='branchAngle')return value+'°';if(key==='placements')return value.length+' 个位置';if(key==='leafTrail')return value.length?'手绘路线':'随风路线';if(key==='leafOrigin'||key==='leafTarget')return `${Math.round(value.x*100)}%, ${Math.round(value.y*100)}%`;if(typeof value==='boolean')return value?'有':'无';return String(value);}
 function showChanges(changes){latestChanges=changes;$('#change-chips').innerHTML=changes.map(item=>`<span>${esc(item.label)} ${esc(value(item.key,item.before))} → ${esc(value(item.key,item.after))}</span>`).join('');}
+function canUndo(){return room?(typeof room.canUndo==='boolean'?room.canUndo:!!room.messages?.some(m=>m.changes?.length)):localHistory.length>0;}
 function renderControls(){
+ const gestureBusy=!!gestureSession;
  $('#time-label').textContent=formatHour(scene.hour);$('#hour-value').textContent=formatHour(scene.hour);$('#angle-value').textContent=scene.branchAngle+'°';$('#depth-value').textContent=scene.branchDepth;$('#wind-value').textContent=Math.round(scene.wind*100)+'%';
- for(const [id,key] of [['hour-range','hour'],['angle-range','branchAngle'],['depth-range','branchDepth'],['wind-range','wind']]){const input=$('#'+id);if(input!==document.activeElement)input.value=String(scene[key]);input.disabled=busy||connecting||codeDraft||drawingTrajectory;}
+ for(const [id,key] of [['hour-range','hour'],['angle-range','branchAngle'],['depth-range','branchDepth'],['wind-range','wind']]){const input=$('#'+id);if(input!==document.activeElement)input.value=String(scene[key]);input.disabled=busy||connecting||codeDraft||drawingTrajectory||gestureBusy;}
  const sharedCanUndo=typeof room?.canUndo==='boolean'?room.canUndo:room?.messages?.some(m=>m.changes?.length);
- $('#undo-world').disabled=busy||connecting||codeDraft||drawingTrajectory||(!room&&!localHistory.length)||(room&&!sharedCanUndo);
- $('#send').disabled=busy||connecting||codeDraft||drawingTrajectory;$$('.suggestions button').forEach(button=>button.disabled=busy||connecting||codeDraft||drawingTrajectory);$('#share-world').disabled=busy&&!room;
+ $('#undo-world').disabled=busy||connecting||codeDraft||drawingTrajectory||gestureBusy||(!room&&!localHistory.length)||(room&&!sharedCanUndo);
+ $('#send').disabled=busy||connecting||codeDraft||drawingTrajectory||gestureBusy;$$('.suggestions button').forEach(button=>button.disabled=busy||connecting||codeDraft||drawingTrajectory||gestureBusy);$('#share-world').disabled=busy&&!room;
  $('#suggestions').hidden=!!lastReply||!!room?.messages?.length;
  $('#play-leaf').textContent=playing&&motionPlaying?'Ⅱ':'▶';
  document.body.classList.toggle('night-scene',scene.hour<6||scene.hour>=19.5);document.body.dataset.hour=String(scene.hour);document.body.dataset.trees=String(scene.trees);document.body.dataset.boats=String(scene.boats);document.body.dataset.mountains=String(scene.mountains);document.body.dataset.revision=String(room?.revision??0);
- codePanel?.update(scene,{before:codeBefore??scene,selected,busy:busy||connecting||drawingTrajectory});
- directEditor?.update(scene,{busy:busy||connecting||codeDraft,resetBusy:busy||connecting,drawing:drawingTrajectory,motionPlaying});
+ codePanel?.update(scene,{before:codeBefore??scene,selected,busy:busy||connecting||drawingTrajectory||gestureBusy});
+ directEditor?.update(scene,{busy:busy||connecting||codeDraft||gestureBusy||!!editBefore,resetBusy:busy||connecting||gestureBusy,drawing:drawingTrajectory,motionPlaying});
  $('#draw-route-hint').hidden=!drawingTrajectory;$('#live-stage').classList.toggle('drawing-trajectory',drawingTrajectory);
- $('#reset-leaf-route').disabled=busy||connecting||codeDraft||!scene.leafTrail?.length;
+ $('#reset-leaf-route').disabled=busy||connecting||codeDraft||gestureBusy||!scene.leafTrail?.length;
+ worldGestures?.update();
 }
 function renderScene(){renderer.render(scene,{phase,showTrajectory:selected==='leaf',compareScene:leafCompare,selectedObject:directEditor?.selectedId,drawingTrajectory,motionTime,motionPlaying});if(document.body.classList.contains('mobile-code-open'))previewRenderer.render(scene,{phase,showTrajectory:selected==='leaf',compareScene:leafCompare,motionTime,motionPlaying});}
 function render(){renderScene();renderControls();}
@@ -47,7 +51,7 @@ function restoreDrawing(){
  drawingSnapshot=null;editBefore=null;
 }
 function setDrawing(enabled){
- if(enabled&&(busy||connecting||codeDraft))return;
+ if(enabled&&(busy||connecting||codeDraft||gestureSession))return;
  if(!enabled)restoreDrawing();else editBefore=null;
  drawingTrajectory=enabled;
  if(enabled){directEditor?.select(null);selected=null;leafCompare=null;$('#inspector').hidden=true;quietOpening();}
@@ -55,7 +59,7 @@ function setDrawing(enabled){
 }
 function pathDraw({points,phase:drawPhase}){
  if(drawPhase==='cancel'){restoreDrawing();drawingTrajectory=false;render();return;}
- if(busy||connecting||codeDraft)return false;
+ if(busy||connecting||codeDraft||gestureSession)return false;
  if(drawPhase==='start'){drawingSnapshot={scene,phase,playing,selected,leafCompare};editBefore=scene;phase=1;playing=false;render();return;}
  if(drawPhase==='move'){
   if(Array.isArray(points)&&points.length>=2){scene=updateScene(editBefore??scene,{leafTrail:points,leafOrigin:points[0],leafTarget:points.at(-1)});selected='leaf';phase=1;render();}
@@ -70,20 +74,20 @@ function pathDraw({points,phase:drawPhase}){
 }
 function inspector(kind){if(drawingTrajectory){drawingTrajectory=false;restoreDrawing();}selected=kind;$('#inspector').hidden=!kind;$$('[data-inspector]').forEach(node=>node.hidden=node.dataset.inspector!==kind);$('#inspector-title').textContent=kind==='tree'?'这棵树怎样生长':kind==='leaf'?'把落叶的过程摊开看':'太阳与时间';if(kind==='leaf')leafCompare=scene;render();quietOpening();}
 function objectDrag({id,point,phase:dragPhase}){
- if(busy||connecting||codeDraft)return false;
+ if(busy||connecting||codeDraft||gestureSession)return false;
  if(dragPhase==='start')editBefore=scene;
  const base=editBefore??scene,patch=moveSceneObject(base,id,point);scene=updateScene(base,patch);render();quietOpening();
  if(dragPhase==='end')finishDirect(patch);
 }
 function trajectoryDrag({handle,point,phase:dragPhase}){
  if(handle==='phase')return;
- if(busy||connecting||codeDraft)return false;
+ if(busy||connecting||codeDraft||gestureSession)return false;
  if(dragPhase==='start')editBefore=scene;
  const patch={[handle==='origin'?'leafOrigin':'leafTarget']:point};scene=updateScene(editBefore??scene,patch);render();quietOpening();
  if(dragPhase==='end')finishDirect(patch);
 }
 const renderer=mountLandscape($('#landscape'),{
- onSunDrag(hour,dragPhase){if(busy||connecting||codeDraft)return false;if(dragPhase==='start')editBefore=scene;scene=updateScene(scene,{hour});render();quietOpening();if(dragPhase==='end')finishDirect({hour});},
+ onSunDrag(hour,dragPhase){if(busy||connecting||codeDraft||gestureSession)return false;if(dragPhase==='start')editBefore=scene;scene=updateScene(scene,{hour});render();quietOpening();if(dragPhase==='end')finishDirect({hour});},
  onObjectSelect({id}){directEditor?.select(id);},onObjectDrag:objectDrag,onTrajectoryDrag:trajectoryDrag,onPathDraw:pathDraw,
  onPhaseChange(value){playing=false;phase=value;render();},onTreeSelect:()=>inspector('tree'),onLeafSelect:()=>inspector('leaf')
 });
@@ -91,10 +95,10 @@ const previewRenderer=mountLandscape($('#code-preview-landscape'));
 directEditor=mountDirectEditor($('#live-stage'),{
  getScene:()=>scene,getObjects:()=>renderer.getObjectPositions(),onCommit:patch=>finishDirect(patch),
  onSelection(id,kind){if(kind==='tree'){inspector('tree');return;}selected=null;leafCompare=null;$('#inspector').hidden=true;render();quietOpening();},
- onInspect(kind){if(kind==='leaf')directEditor?.select(null);inspector(kind);},onUndo:()=>$('#undo-world').click(),notify:toast
+ onInspect(kind){if(kind==='leaf')directEditor?.select(null);inspector(kind);},onUndo:undoWorld,onRedo:redoWorld,getCanUndo:canUndo,getCanRedo:()=>redoStack.length>0,notify:toast
  ,onDraw:()=>setDrawing(!drawingTrajectory),onReset:resetLandscape,onToggleMotion(){motionPlaying=!motionPlaying;render();},onHelp:showShortcuts,onNudge:delta=>renderer.nudgeSelected(delta)
 });
-function animate(now){const delta=Math.min((now-lastFrame)/1000,.1);lastFrame=now;if(motionPlaying&&stageVisible&&!document.hidden){motionTime+=delta;if(playing)phase=(phase+delta/7)%1;renderScene();if(selected==='leaf'&&$('#leaf-time')!==document.activeElement)$('#leaf-time').value=String(phase);}requestAnimationFrame(animate);}
+function animate(now){const delta=Math.min((now-lastFrame)/1000,.1);lastFrame=now;if(motionPlaying&&stageVisible&&!document.hidden&&!gestureSession){motionTime+=delta;if(playing)phase=(phase+delta/7)%1;renderScene();if(selected==='leaf'&&$('#leaf-time')!==document.activeElement)$('#leaf-time').value=String(phase);}requestAnimationFrame(animate);}
 function setConnection(text,connected=false){$('#connection').textContent=text;$('#connection').classList.toggle('connected',connected);}
 function renderMessages(){
  const messages=room?.messages??[];const last=messages.at(-1);
@@ -112,6 +116,7 @@ function renderMessages(){
 function acceptState(state){
  if(!state||!state.scene||!Number.isSafeInteger(state.revision))throw Error('服务器状态无效');
  if(room&&state.id===room.id&&state.revision<room.revision)return false;
+ if(room&&state.id===room.id&&state.revision!==room.revision&&!historyAction)redoStack=[];
  scene=validateScene(state.scene);room={...room,...state,receipt:state.receipt??null,connected:true};codeDraft=false;editBefore=null;
  const lastChange=[...(room.messages??[])].reverse().find(message=>message.changes?.length);
  codeBefore=lastChange?updateScene(scene,Object.fromEntries(lastChange.changes.map(change=>[change.key,change.before]))):scene;
@@ -130,6 +135,7 @@ async function request(path,{method='GET',body,timeout=29000}={}){
 }
 async function ensureRoom(){
  if(room?.connected&&!shareUnavailable&&room.expiresAt>Date.now())return;
+ if(gestureSession||editBefore)throw Error('先松手保存或取消预览，再连接共享房间。');
  if(roomConnection)return roomConnection;
  connecting=true;renderControls();renderInvite();
  roomConnection=(async()=>{
@@ -148,7 +154,7 @@ async function pollRoom(){
  polling=false;schedulePoll();
 }
 async function sendOperation(payload,undo=false,retryRequest=null,onApplied=null){
- if(busy)return;busy=true;quietOpening();$('#retry').hidden=true;renderControls();
+ if(busy||gestureSession||editBefore)return false;busy=true;quietOpening();$('#retry').hidden=true;renderControls();
  const operation=retryRequest&&!retryRequest.retryAsNew?retryRequest:{payload,undo,nonce:crypto.randomUUID(),onApplied:retryRequest?.onApplied??onApplied};
  operation.inFlight=true;operation.retryAsNew=false;lastRequest=operation;const {nonce}=operation;
  try{await ensureRoom();operation.expectedRevision??=room.revision;const wait=Math.max(0,writeNotBefore-Date.now());if(wait)await new Promise(resolve=>setTimeout(resolve,wait));writeNotBefore=Date.now()+1050;
@@ -158,7 +164,7 @@ async function sendOperation(payload,undo=false,retryRequest=null,onApplied=null
   catch(error){if(attempt===0&&error.status===429&&error.code==='ROOM_RATE_LIMIT'){await new Promise(resolve=>setTimeout(resolve,1100));continue;}throw error;}
  }
  const {data,status:httpStatus}=result;acceptState(data);if(httpStatus===202&&receiptFor(nonce)?.kind==='pending'){status('请求仍在处理中，正在同步实际结果。');busy=true;}else busy=false;
- }catch(error){if(error.current)acceptState(error.current);else if(room?.scene){scene=validateScene(room.scene);render();}busy=false;if(error.status===409){status('风景刚在另一端变化了，已更新到最新状态。请再试这次修改。');}else{status(error.message==='The operation was aborted due to timeout'?'请求尚未确认，正在读取房间中的实际结果。':error.message);}
+ }catch(error){redoStack=[];if(error.current)acceptState(error.current);else if(room?.scene){scene=validateScene(room.scene);render();}busy=false;if(error.status===409){status('风景刚在另一端变化了，已更新到最新状态。请再试这次修改。');}else{status(error.message==='The operation was aborted due to timeout'?'请求尚未确认，正在读取房间中的实际结果。':error.message);}
  if(room&&(!error.status||error.status>=500)){try{const {data}=await request('/api/rooms/'+room.id,{timeout:8000});acceptState(data);busy=receiptFor(nonce,data)?.kind==='pending';}catch{}}
  const recorded=receiptFor(nonce);
  operation.retryAsNew=error.status===409&&!recorded;
@@ -168,15 +174,75 @@ async function sendOperation(payload,undo=false,retryRequest=null,onApplied=null
  if(receipt?.kind===(undo?'undo':Object.hasOwn(operation.payload,'patch')?'patch':'instruction')){operation.onApplied?.();return true;}
  return false;
 }
-async function sendText(text){if(!text.trim()||busy||codeDraft||connecting||drawingTrajectory)return;$('#instruction').value='';await sendOperation({text:text.trim()});}
+async function sendText(text){if(!text.trim()||busy||codeDraft||connecting||drawingTrajectory||gestureSession||editBefore)return;$('#instruction').value='';await sendOperation({text:text.trim()});}
 function finishDirect(patch,{onApplied=null,confirmRoom=false}={}){
  const before=editBefore??scene;editBefore=null;codeDraft=false;const next=updateScene(before,patch);const changes=sceneChanges(before,next);scene=next;if(!changes.length&&!(room&&confirmRoom)){render();onApplied?.();return true;}
+ if(historyAction!=='redo')redoStack=[];
  codeBefore=before;
  if(room){status('正在同步这次直接修改…');render();return sendOperation({patch},false,null,onApplied);}
  else{localHistory.push(before);if(localHistory.length>15)localHistory.shift();saveLocal();showChanges(changes);lastReply='直接修改，结果已经在画面上。';status('当前为本机预览，重新连接后可以共享。');codePanel?.update(scene,{before,selected,resetDraft:true});render();onApplied?.();return true;}
 }
+async function undoWorld(){
+ if(busy||connecting||codeDraft||drawingTrajectory||gestureSession||editBefore||!canUndo())return false;
+ const target=scene;historyAction='undo';
+ try{
+  let applied=true;
+  if(room)applied=await sendOperation({},true);
+  else{scene=localHistory.pop()??scene;saveLocal();showChanges(sceneChanges(target,scene));}
+  if(applied)redoStack.push({target,base:scene,revision:room?.revision??0});
+  render();return applied;
+ }finally{historyAction=null;renderControls();}
+}
+async function redoWorld(){
+ if(busy||connecting||codeDraft||drawingTrajectory||gestureSession||editBefore||!redoStack.length)return false;
+ const entry=redoStack.at(-1);
+ if(entry.revision!==(room?.revision??0)||sceneChanges(entry.base,scene).length){redoStack=[];renderControls();toast('风景已变化，请继续基于当前画面修改。');return false;}
+ const patch=Object.fromEntries(sceneChanges(scene,entry.target).map(change=>[change.key,change.after]));
+ historyAction='redo';
+ try{
+  const applied=await finishDirect(patch);
+  if(applied){redoStack.pop();if(redoStack.length)Object.assign(redoStack.at(-1),{base:scene,revision:room?.revision??0});}
+  return applied;
+ }finally{historyAction=null;renderControls();}
+}
+function beginGesture(){
+ if(busy||connecting||codeDraft||drawingTrajectory||editBefore||gestureSession)return false;
+ gestureSession={base:scene,phase,playing,kind:'drag'};editBefore=scene;quietOpening();renderControls();return true;
+}
+function cancelGesturePreview(){
+ if(!gestureSession)return;
+ scene=gestureSession.base;phase=gestureSession.phase;playing=gestureSession.playing;gestureSession=null;editBefore=null;
+ $('#live-stage').dataset.placement='';$('#landscape').querySelectorAll('[data-edit-preview]').forEach(node=>node.removeAttribute('data-edit-preview'));render();
+}
+function previewGesture(patch){
+ if(!gestureSession)return false;
+ scene=updateScene(gestureSession.base,patch);gestureSession.patch=patch;
+ if(patch.leafTrail){selected='leaf';phase=0;playing=true;}render();return true;
+}
+async function commitGesture(patch){
+ if(!gestureSession)return false;
+ const id=gestureSession.id;gestureSession=null;
+ $('#live-stage').dataset.placement='';$('#landscape').querySelectorAll('[data-edit-preview]').forEach(node=>node.removeAttribute('data-edit-preview'));
+ const applied=await finishDirect(patch);if(applied&&id)directEditor?.select(id);return applied;
+}
+function gestureCommand(command,options={}){
+ if(command==='paste-cancel'){cancelGesturePreview();return true;}
+ if(command==='paste-preview'){
+  if(!gestureSession&&!beginGesture())return false;
+  if(gestureSession.kind!=='paste'){
+   try{gestureSession.kind='paste';gestureSession.paste=directEditor.preparePaste(options.point);}catch(error){cancelGesturePreview();toast(error.message);return false;}
+  }
+  const prepared=gestureSession.paste;if(!prepared){cancelGesturePreview();return false;}
+  const patch={...prepared.patch,placements:prepared.patch.placements.map(item=>item.id===prepared.id?{...item,...options.point}:item)};
+  gestureSession.id=prepared.id;previewGesture(patch);
+  $('#live-stage').dataset.placement='preview';$('#landscape').querySelector(`[data-scene-object="${prepared.id}"]`)?.setAttribute('data-edit-preview','');return true;
+ }
+ if(command==='paste-commit')return gestureSession?commitGesture(gestureSession.patch):false;
+ if(gestureSession)return false;
+ return directEditor.command(command,options);
+}
 function resetLandscape(){
- if(busy||connecting)return;
+ if(busy||connecting||gestureSession)return;
  // Discard uncommitted JSON, slider/drag and hand-drawn previews before choosing
  // the same committed baseline used by the room's CAS and undo snapshot.
  renderer.cancelPathDraw();if(drawingTrajectory){drawingTrajectory=false;restoreDrawing();}
@@ -192,17 +258,17 @@ function resetLandscape(){
  }});
 }
 for(const [id,key] of [['hour-range','hour'],['angle-range','branchAngle'],['depth-range','branchDepth'],['wind-range','wind']]){
- const input=$('#'+id);input.addEventListener('input',()=>{if(busy||connecting)return;if(!editBefore)editBefore=scene;scene=updateScene(scene,{[key]:Number(input.value)});render();quietOpening();});input.addEventListener('change',()=>{if(busy||connecting)return;finishDirect({[key]:Number(input.value)});});
+ const input=$('#'+id);input.addEventListener('input',()=>{if(busy||connecting||gestureSession)return;if(!editBefore)editBefore=scene;scene=updateScene(scene,{[key]:Number(input.value)});render();quietOpening();});input.addEventListener('change',()=>{if(busy||connecting||gestureSession)return;finishDirect({[key]:Number(input.value)});});
 }
 $('#compose').addEventListener('submit',event=>{event.preventDefault();sendText($('#instruction').value);});
 $('#instruction').addEventListener('keydown',event=>{if(event.key==='Enter'&&!event.shiftKey&&!event.isComposing){event.preventDefault();$('#compose').requestSubmit();}});
 $$('[data-prompt]').forEach(button=>button.addEventListener('click',()=>sendText(button.dataset.prompt)));
 $('#retry').addEventListener('click',()=>{if(lastRequest&&!busy)sendOperation(lastRequest.payload,lastRequest.undo,lastRequest);});
-$('#undo-world').addEventListener('click',()=>{if(busy)return;if(room)sendOperation({},true);else{const before=scene;scene=localHistory.pop()??scene;showChanges(sceneChanges(before,scene));saveLocal();render();toast('已撤销这次修改。');}});
+$('#undo-world').addEventListener('click',undoWorld);
 $('#show-tree').addEventListener('click',()=>inspector('tree'));$('#show-time').addEventListener('click',()=>inspector('sun'));$('#show-leaf').addEventListener('click',()=>inspector('leaf'));$('#close-inspector').addEventListener('click',()=>{selected=null;leafCompare=null;$('#inspector').hidden=true;render();});
-$('#play-leaf').addEventListener('click',()=>{if(!motionPlaying){playing=true;motionPlaying=true;}else playing=!playing;render();});$('#leaf-time').addEventListener('input',event=>{playing=false;phase=Number(event.target.value);render();});
+$('#play-leaf').addEventListener('click',()=>{if(gestureSession)return;if(!motionPlaying){playing=true;motionPlaying=true;}else playing=!playing;render();});$('#leaf-time').addEventListener('input',event=>{if(gestureSession)return;playing=false;phase=Number(event.target.value);render();});
 $('#draw-leaf-route').addEventListener('click',()=>setDrawing(true));$('#cancel-draw-route').addEventListener('click',()=>setDrawing(false));
-$('#reset-leaf-route').addEventListener('click',()=>{if(busy||connecting||codeDraft)return;const original=createScene();finishDirect({leafTrail:[],leafOrigin:original.leafOrigin,leafTarget:original.leafTarget});});
+$('#reset-leaf-route').addEventListener('click',()=>{if(busy||connecting||codeDraft||gestureSession)return;const original=createScene();finishDirect({leafTrail:[],leafOrigin:original.leafOrigin,leafTarget:original.leafTarget});});
 document.addEventListener('keydown',event=>{if(event.key!=='Escape')return;if($('#shortcut-help').open){event.preventDefault();event.stopImmediatePropagation();$('#shortcut-help').close();return;}if(drawingTrajectory){event.preventDefault();event.stopImmediatePropagation();setDrawing(false);}},true);
 let shareFocus,aboutFocus;
 function qrSvg(text){const code=qrcode(0,'M');code.addData(text);code.make();const n=code.getModuleCount();let d='';for(let r=0;r<n;r++)for(let c=0;c<n;c++)if(code.isDark(r,c))d+=`M${c+4} ${r+4}h1v1h-1z`;return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${n+8} ${n+8}" shape-rendering="crispEdges" aria-hidden="true"><rect width="100%" height="100%" fill="white"/><path d="${d}" fill="#173847"/></svg>`;}
@@ -214,18 +280,18 @@ function renderInvite(error){
  if(ready){const link=inviteUrl();if(inviteCache!==link){const svg=qrSvg(link);$('#inline-room-qr').innerHTML=svg;$('#room-qr').innerHTML=svg;inviteCache=link;}$('#room-link').value=link;$('#inline-share-status').textContent='扫一扫，和我修改同一片风景。';$('#inline-share-retry').hidden=true;shareError='';}
  else{inviteCache='';$('#inline-room-qr').replaceChildren();const label=document.createElement('span');label.className='qr-placeholder';label.textContent=connecting?'连接中':'暂未连接';$('#inline-room-qr').append(label);$('#room-qr').replaceChildren();$('#room-link').value='';$('#inline-share-status').textContent=connecting?'正在准备同一房间的二维码…':shareError||'连接已到期，请重新连接。';$('#inline-share-retry').hidden=connecting;}
 }
-async function showShare(){if(busy&&!room)return;shareFocus=document.activeElement;try{await ensureRoom();renderInvite();$('#share-note').textContent='手机扫码后发一句话，这里的风景就会跟着变。';$('#share-dialog').showModal();}catch(error){status(error.message);toast('暂时没有连接成功，二维码尚未生成。');}}
+async function showShare(){if(busy&&!room)return;worldGestures?.cancel();shareFocus=document.activeElement;try{await ensureRoom();renderInvite();$('#share-note').textContent='手机扫码后发一句话，这里的风景就会跟着变。';$('#share-dialog').showModal();}catch(error){status(error.message);toast('暂时没有连接成功，二维码尚未生成。');}}
 $('#share-world').addEventListener('click',showShare);$('#inline-qr-open').addEventListener('click',showShare);
 $('#inline-share-link').addEventListener('click',()=>$('#copy-room').click());
-$('#inline-share-retry').addEventListener('click',()=>{if(connecting)return;if(shareUnavailable&&room){room=null;lastReply='';lastRequest=null;localHistory=[];history.replaceState(null,'',location.pathname+location.search);}ensureRoom().catch(error=>status(error.message));});
+$('#inline-share-retry').addEventListener('click',()=>{if(connecting)return;worldGestures?.cancel();if(editBefore)return;if(shareUnavailable&&room){room=null;lastReply='';lastRequest=null;localHistory=[];history.replaceState(null,'',location.pathname+location.search);}ensureRoom().catch(error=>status(error.message));});
 $('#close-share').addEventListener('click',()=>$('#share-dialog').close());$('#share-dialog').addEventListener('close',()=>shareFocus?.focus());
 $('#copy-room').addEventListener('click',async()=>{try{await navigator.clipboard.writeText($('#room-link').value);toast('已复制同一风景的编辑链接。');}catch{$('#room-link').select();toast('请手动复制上面的链接。');}});
 $('#about').addEventListener('click',()=>{aboutFocus=document.activeElement;$('#about-dialog').showModal();});$('#close-about').addEventListener('click',()=>$('#about-dialog').close());$('#about-dialog').addEventListener('close',()=>aboutFocus?.focus());
 document.addEventListener('visibilitychange',()=>{lastFrame=performance.now();if(document.hidden)clearTimeout(pollTimer);else if(room)pollRoom();});
 window.addEventListener('hashchange',()=>{const next=new URLSearchParams(location.hash.slice(1));if(next.get('room')!==(room?.id??null)||next.get('key')!==(room?.token??null)||location.hash.startsWith('#doc='))location.reload();});
 codePanel=mountCodePanel($('#code-editor-mount'),{
- onPreview(patch){if(busy||connecting||drawingTrajectory)return;if(!editBefore)editBefore=scene;codeDraft=true;codeBefore=editBefore;scene=updateScene(editBefore,patch);render();status('参数预览 · 点击“应用并同步”共享这次修改。');},
- async onCommit(patch){if(busy||connecting)return;if(!Object.keys(patch).length)return;finishDirect(patch);},
+ onPreview(patch){if(busy||connecting||drawingTrajectory||gestureSession)return;if(!editBefore)editBefore=scene;codeDraft=true;codeBefore=editBefore;scene=updateScene(editBefore,patch);render();status('参数预览 · 点击“应用并同步”共享这次修改。');},
+ async onCommit(patch){if(busy||connecting||gestureSession)return;if(!Object.keys(patch).length)return;finishDirect(patch);},
  onCancel(){if(editBefore){scene=editBefore;editBefore=null;}codeDraft=false;render();status(room?'已取消预览 · 显示房间中的风景':'已取消预览。');}
 });
 render();requestAnimationFrame(animate);hideOpening=setTimeout(()=>$('#opening').classList.add('quiet'),12000);
@@ -286,7 +352,7 @@ function updateCodeToggle(){const mobile=matchMedia('(max-width:900px)').matches
 $('#toggle-code').addEventListener('click',()=>{if(matchMedia('(max-width:900px)').matches){document.body.classList.toggle('mobile-code-open');if(document.body.classList.contains('mobile-code-open'))$('.code-side').scrollIntoView({block:'start',behavior:reduced?'instant':'smooth'});}else document.body.classList.toggle('code-hidden');updateCodeToggle();render();});
 matchMedia('(max-width:900px)').addEventListener('change',updateCodeToggle);updateCodeToggle();
 document.addEventListener('keydown',event=>{
- if(document.querySelector('dialog[open]'))return;
+ if(event.defaultPrevented||document.querySelector('dialog[open]'))return;
  if(event.key==='Escape'&&document.body.classList.contains('focus-mode'))exitPresentation();
  if(event.key.toLowerCase()==='f'&&!event.ctrlKey&&!event.metaKey&&!event.altKey&&!event.repeat&&!event.target.closest('input,textarea,select,[contenteditable]')){event.preventDefault();document.body.classList.contains('focus-mode')?exitPresentation():enterPresentation();}
 });
@@ -321,3 +387,15 @@ document.addEventListener('pointerdown',retryIntroAfterGesture,{capture:true});d
 document.addEventListener('visibilitychange',updateIntroPlayback);
 new IntersectionObserver(entries=>{introVisible=(entries[0]?.intersectionRatio??0)>=.15;updateIntroPlayback();},{threshold:[0,.15]}).observe(introVideo);
 if(document.body.classList.contains('controller')){introVideo.autoplay=false;introVideo.removeAttribute('autoplay');updateIntroPlayback();}
+
+worldGestures=mountWorldGestures(stage,{
+ getScene:()=>scene,getObjects:()=>renderer.getObjectPositions(),getSelectedId:()=>directEditor.selectedId,
+ isBusy:()=>busy||connecting||codeDraft||drawingTrajectory||(!gestureSession&&!!editBefore),
+ begin:beginGesture,preview:previewGesture,commit:commitGesture,cancel:cancelGesturePreview,
+ select(id){directEditor.select(/^(tree|boat|mountain|bird):\d+$/.test(id??'')?id:null);if(['leaf','leafOrigin','leafTarget','draw:leaf'].includes(id)){selected='leaf';leafCompare=scene;render();}},
+ command:gestureCommand,editState:id=>directEditor.editState(id),undo:undoWorld,redo:redoWorld,reset:resetLandscape,
+ toggleMotion(){motionPlaying=!motionPlaying;render();},
+ fullscreen:()=>document.body.classList.contains('focus-mode')?exitPresentation():enterPresentation(),
+ music:()=>stage.querySelector('.music-toggle')?.click()
+});
+renderControls();

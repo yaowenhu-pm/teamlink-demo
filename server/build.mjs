@@ -14,7 +14,7 @@ await build({ absWorkingDir: root, entryPoints: ['web/world.mjs'], bundle: true,
   target: 'es2022', outfile: resolve(output, 'world.mjs'), legalComments: 'inline', minify: false, sourcemap: false });
 let index = await readFile(resolve(output, 'index.html'), 'utf8');
 const fingerprints = {};
-for (const name of ['world.mjs', 'world.css']) {
+for (const name of ['world.mjs', 'world.css', 'world-gestures.css']) {
   const digest = createHash('sha256').update(await readFile(resolve(output, name))).digest('hex').slice(0, 12);
   fingerprints[name] = digest;
   index = index.replace(new RegExp(`/${name.replace('.', '\\.')}\\"`, 'g'), `/${name}?v=${digest}"`);
