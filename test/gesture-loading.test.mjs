@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {createHash} from 'node:crypto';
+import {readFile} from 'node:fs/promises';
 import {createGestureTaskLoader} from '../web/gesture-loading.mjs';
 
 const root = 'https://fixture.invalid/vision/';
@@ -393,4 +394,18 @@ test('cancellation during a cache put permits only its complete verified bytes a
   assert.deepEqual(local.entries.get(persistentKey(root + 'model.task')), modelBytes);
   assert.equal(progress.length, count); assert.equal(f.tasks.length, 0); assert.equal(f.created.length, 0);
   assert.equal(f.clock.pending.size, 0);
+});
+
+// The real Emscripten loader fetches the verified WASM through an object URL.
+// A task-constructor stub cannot exercise this document-level CSP boundary.
+test('homepage permits local WASM Blob fetches while keeping external connections blocked', async () => {
+  const html = await readFile(new URL('../web/index.html', import.meta.url), 'utf8');
+  const policy = html.match(/<meta http-equiv="Content-Security-Policy" content="([^"]+)"/u)?.[1];
+  assert.ok(policy, 'the public homepage must declare its content security policy');
+  const directives = new Map(policy.split(';').filter(value => value.trim()).map(value => {
+    const [name, ...sources] = value.trim().split(/\s+/u); return [name, sources];
+  }));
+  assert.deepEqual(new Set(directives.get('connect-src')), new Set(["'self'", 'blob:']));
+  assert.ok(directives.get('script-src').includes("'wasm-unsafe-eval'"));
+  assert.ok(!directives.get('script-src').includes("'unsafe-eval'"));
 });
