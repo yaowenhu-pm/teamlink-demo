@@ -15,8 +15,9 @@ export function mountWorldGestures(stage,host) {
   <div class="world-gesture-loading" data-wg="loading" hidden><progress data-wg="loading-meter" max="100" value="0" aria-label="识别文件准备进度"></progress><span data-wg="loading-detail">准备识别…</span></div>
   <p class="world-gesture-note" data-wg="note">首次准备约 10 MB，之后复用缓存。画面仅在本机识别。</p>
  </section>
- <div class="world-gesture-legend" data-wg="legend" hidden><button type="button" data-wg="compact-mode" aria-pressed="false">自动拾取</button><span>三指切模式 <progress data-wg="mode-meter" max="1" value="0" aria-label="三指切换进度"></progress></span><span>V 选对象 / 编辑 <progress data-wg="selector-meter" max="1" value="0" aria-label="V 手势进度"></progress></span><button type="button" data-wg="compact-stop" aria-label="关闭摄像头">×</button></div>
- <aside class="world-gesture-camera" data-wg="camera" hidden aria-label="仅本机识别的摄像头预览"><video data-wg="video" muted playsinline></video><svg data-wg="hand-overlay" xmlns="http://www.w3.org/2000/svg" hidden aria-hidden="true"></svg><span data-wg="hand-label">等待手掌</span></aside>
+ <button class="world-fullscreen-tools" data-wg="fullscreen-tools" type="button" aria-controls="world-gesture-panel" aria-expanded="false" hidden>操作</button>
+ <div class="world-gesture-legend" data-wg="legend" hidden><button type="button" data-wg="compact-mode" aria-pressed="false">自动拾取</button><span>三指切模式 <progress data-wg="mode-meter" max="1" value="0" aria-label="三指切换进度"></progress></span><span>V 选对象 / 编辑 <progress data-wg="selector-meter" max="1" value="0" aria-label="V 手势进度"></progress></span></div>
+ <aside class="world-gesture-camera" data-wg="camera" hidden aria-label="仅本机识别的摄像头预览"><video data-wg="video" muted playsinline></video><svg data-wg="hand-overlay" xmlns="http://www.w3.org/2000/svg" hidden aria-hidden="true"></svg><div class="world-gesture-camera-controls"><button type="button" data-wg="tools-toggle" aria-controls="world-gesture-panel" aria-expanded="false" aria-label="展开操作面板，当前自动拾取">自动 · 操作</button><button type="button" data-wg="compact-stop" aria-label="关闭摄像头" title="关闭摄像头">×</button></div><span data-wg="hand-label">等待手掌</span></aside>
  <section class="world-gesture-menu" data-wg="menu" hidden aria-label="手势选择与编辑"></section>
  <div class="world-gesture-highlight" data-wg="highlight" hidden aria-hidden="true"><span></span></div>
  <div class="world-gesture-cursor" data-wg="cursor" hidden aria-hidden="true"><span></span></div>
@@ -29,15 +30,38 @@ export function mountWorldGestures(stage,host) {
  let cameraState='off',stream=null,detector=null,loadController=null,epoch=0,frameId=null,lastVideoTime=-1,lastInference=0,lastAssets=null;
  let selectionMode='auto',explicitId=null,lastManualId=null,hoverId=null,commandContext=null,targets=[],targetsAt=-Infinity,menuReleaseAt=null,lastCursor=null;
  let transaction=null,placing=false,pasteStarting=false,placementHeld=false,pending=false,selectingHost=false,pointerHeld=false,pointerId=null,focused=doc.hasFocus(),destroyed=false;
- let panelOpen=false,lastHostSelected=host.getSelectedId?.()??null,previewGeneration=0;
+ let panelOpen=false,fullscreenActive=false,lastHostSelected=host.getSelectedId?.()??null,previewGeneration=0;
  const nativeId=id=>/^(tree|boat|mountain|bird):\d+$/u.test(id??'');
  const busy=()=>pending||host.isBusy();
  const status=message=>{if($('status').textContent!==message)$('status').textContent=message;};
  const menu=mountGestureMenu($('menu'),{onSelect:selectTarget,onAction:action,onModeChange:mode=>setMode(mode,{fromMenu:true})});
- function panel(open){panelOpen=open;root.querySelector('.world-gesture-panel').hidden=!open;launch.setAttribute('aria-expanded',String(open));root.classList.toggle('world-gesture-panel-open',open);}
+ function syncChrome(){
+  const nextFullscreen=doc.fullscreenElement===stage||doc.webkitFullscreenElement===stage||doc.body.classList.contains('focus-mode');
+  let returnFocus=false;
+  if(nextFullscreen!==fullscreenActive){
+   fullscreenActive=nextFullscreen;
+   if(fullscreenActive){returnFocus=stage.contains(doc.activeElement)&&!!doc.activeElement?.closest('.world-gesture-panel,.world-gesture-menu,.canvas-tools,.object-tools,#inspector');panelOpen=false;closeMenu();}
+  }
+  const clean=fullscreenActive&&!panelOpen;
+  stage.classList.toggle('gesture-clean',clean);root.classList.toggle('world-gesture-clean',clean);
+  root.querySelector('.world-gesture-panel').hidden=!panelOpen;launch.setAttribute('aria-expanded',String(panelOpen));root.classList.toggle('world-gesture-panel-open',panelOpen);
+  $('legend').hidden=cameraState!=='tracking'||!panelOpen;
+  $('fullscreen-tools').hidden=!fullscreenActive||cameraState==='tracking';
+  $('fullscreen-tools').textContent=panelOpen?'收起操作':'操作';$('fullscreen-tools').setAttribute('aria-expanded',String(panelOpen));
+  $('tools-toggle').setAttribute('aria-expanded',String(panelOpen));
+  $('tools-toggle').setAttribute('aria-label',`${panelOpen?'收起':'展开'}操作面板，当前${selectionMode==='auto'?'自动拾取':'手动选择'}`);
+  $('tools-toggle').textContent=selectionMode==='auto'?'自动 · 操作':'手动 · 操作';
+  if(returnFocus)(cameraState==='tracking'?$('tools-toggle'):$('fullscreen-tools')).focus({preventScroll:true});
+ }
+ function panel(open){
+  const focusedPanel=root.querySelector('.world-gesture-panel').contains(doc.activeElement);
+  panelOpen=open;syncChrome();
+  if(!panelOpen&&focusedPanel)(cameraState==='tracking'?$('tools-toggle'):fullscreenActive?$('fullscreen-tools'):launch).focus({preventScroll:true});
+ }
  function cameraUI(next){cameraState=next;root.dataset.cameraState=next;stage.dataset.gestureCamera=next;
   $('start').hidden=next==='loading'||next==='tracking';$('stop').hidden=next!=='loading'&&next!=='tracking';$('stop').textContent=next==='loading'?'取消准备':'关闭摄像头';$('loading').hidden=next!=='loading';
-  $('legend').hidden=next!=='tracking';launch.textContent=next==='tracking'?'手势已开启':next==='loading'?'准备手势…':'手势控制';$('start').textContent=next==='error'?'重试摄像头':'开启摄像头';
+  launch.textContent=next==='tracking'?'手势已开启':next==='loading'?'准备手势…':'手势控制';$('start').textContent=next==='error'?'重试摄像头':'开启摄像头';
+  if(next==='error')panel(true);else syncChrome();
  }
  function update(){
   if(destroyed)return;targetsAt=-Infinity;
@@ -49,7 +73,7 @@ export function mountWorldGestures(stage,host) {
   for(const name of ['mode','compact-mode']){$(name).textContent=selectionMode==='auto'?'自动拾取':'手动选择';$(name).setAttribute('aria-pressed',String(selectionMode==='manual'));$(name).disabled=busy()||!!transaction||placing;}
   $('menu-open').disabled=busy()||!!transaction;launch.disabled=false;
   if(menu.isOpen())menu.updateEditState(host.editState(commandContext??explicitId??hoverId));
-  highlight();
+  syncChrome();highlight();
  }
  function collectTargets(force=false){
   const now=performance.now();if(!force&&now-targetsAt<100)return targets;
@@ -80,7 +104,7 @@ export function mountWorldGestures(stage,host) {
  }
  function openMenu(){
   if(busy())return;
-  const context=explicitId??hoverId??host.getSelectedId?.()??null;cancel();commandContext=context;
+  const context=explicitId??hoverId??host.getSelectedId?.()??null;cancel();if(fullscreenActive)panel(false);commandContext=context;
   menu.open({targets:collectTargets(true),selectedId:explicitId??context,scene:host.getScene(),selectionMode,editState:host.editState(context)});root.classList.add('world-gesture-menu-open');menuReleaseAt=null;status('张开手，将光标停在按钮上。也可直接点击。');highlight();
  }
  function toggleMenu(){if(menu.isOpen()){closeMenu();resetTrackers();}else openMenu();}
@@ -160,6 +184,7 @@ export function mountWorldGestures(stage,host) {
   const input={hands:result.landmarks??[],timestampMs:now,width:video.videoWidth,height:video.videoHeight,confidence:result.handedness?.[0]?.[0]?.score??1,handId:result.handedness?.[0]?.[0]?.categoryName??'single'};
   const pinch=tracker.update(input),mode=modeTracker.update({...input,pinching:pinch.pinching}),select=mode.pose?selector.cancel('mode-pose'):selector.update({...input,pinching:pinch.pinching});
   root.dataset.handPhase=pinch.phase;root.dataset.selectorPhase=select.phase;root.dataset.modeGesturePhase=mode.phase;feedback(result.landmarks?.[0],pinch);
+  if(mode.pose)$('hand-label').textContent='保持三指 · 切换模式';else if(select.pose)$('hand-label').textContent='保持 V · 选择 / 编辑';
   $('cursor').hidden=!pinch.cursor;
   if(pinch.cursor){lastCursor={...pinch.cursor};const s=stage.getBoundingClientRect(),r=svg.getBoundingClientRect();$('cursor').style.left=r.left-s.left+pinch.cursor.x*r.width+'px';$('cursor').style.top=r.top-s.top+pinch.cursor.y*r.height+'px';}
   $('mode-meter').value=mode.progress;$('selector-meter').value=select.progress;
@@ -178,7 +203,7 @@ export function mountWorldGestures(stage,host) {
   }
   if(pinch.phase==='cancel'||pinch.phase==='lost'){cancel(pinch.reason==='multiple-hands'?'镜头里留一只手，就能继续。':'先张开一只手，再捏合。');return;}
   if((mode.pose||select.pose)&&!transaction)return;
-  const inventory=collectTargets(),r=svg.getBoundingClientRect(),at=pinch.cursor?doc.elementFromPoint(r.left+pinch.cursor.x*r.width,r.top+pinch.cursor.y*r.height):null,overUI=at?.closest('.world-gesture-panel,.world-gesture-camera,.world-gesture-legend,.canvas-tools,.object-tools,.inspector,.presentation-tools');
+  const inventory=collectTargets(),r=svg.getBoundingClientRect(),at=pinch.cursor?doc.elementFromPoint(r.left+pinch.cursor.x*r.width,r.top+pinch.cursor.y*r.height):null,overUI=at?.closest('.world-gesture-panel,.world-gesture-camera,.world-gesture-legend,.world-fullscreen-tools,.canvas-tools,.object-tools,.inspector,.presentation-tools');
   const hit=(selectionMode==='manual'&&!explicitId)||(selectionMode==='auto'&&overUI)?null:explicitId==='draw:leaf'?{id:'draw:leaf',label:'落叶路线',operation:'draw'}:hitTestGestureTargets(inventory,pinch.cursor,{explicitId,slop:.009});
   if(pinch.phase==='start'&&!hit)targetTracker.cancel();
   const picked=targetTracker.update({timestampMs:now,targetId:hit?.id??null,phase:pinch.phase});hoverId=selectionMode==='auto'?(hit?.id===picked.targetId?hit.id:null):picked.targetId;
@@ -232,7 +257,7 @@ export function mountWorldGestures(stage,host) {
    pendingStream=await navigator.mediaDevices.getUserMedia({video:{facingMode:'user',width:{ideal:640},height:{ideal:480},frameRate:{ideal:24,max:30}},audio:false});
    if(session!==epoch){pendingStream.getTracks().forEach(t=>t.stop());return;}stream=pendingStream;const track=stream.getVideoTracks()[0];if(!track||track.readyState!=='live')throw new DOMException('Camera ended','NotReadableError');
    track.addEventListener('ended',()=>{if(session===epoch)stop('摄像头连接已结束，可以重新开启。');},{once:true});video.srcObject=stream;$('camera').hidden=false;
-   await wait(video.play(),controller.signal,10000,'CameraTimeoutError');if(session!==epoch)return;loadController=null;lastVideoTime=-1;lastInference=performance.now();resetTrackers();cameraUI('tracking');status('先张开一只手，再捏合。松开即同步。');
+   await wait(video.play(),controller.signal,10000,'CameraTimeoutError');if(session!==epoch)return;loadController=null;lastVideoTime=-1;lastInference=performance.now();resetTrackers();cameraUI('tracking');closeMenu();status('先张开一只手，再捏合。松开即同步。');
    $('note').textContent=(lastAssets?.total&&lastAssets.cacheLoaded===lastAssets.total?'已命中本机缓存。':'识别文件已就绪，可复用缓存。')+' V 选对象 / 编辑，三指切换模式。画面不上传。';infer(session);
   }catch(error){if(session!==epoch){pendingStream?.getTracks().forEach(t=>t.stop());try{pendingDetector?.close();}catch{}return;}stop(cameraError(error),'error');}
  }
@@ -240,7 +265,7 @@ export function mountWorldGestures(stage,host) {
  const onPointerUp=event=>{if(event.pointerId!==pointerId)return;pointerHeld=false;pointerId=null;resetTrackers();};
  const onKey=event=>{
   if(event.defaultPrevented||event.repeat||event.isComposing||event.ctrlKey||event.metaKey||event.altKey||doc.querySelector('dialog[open]')||event.target.closest?.('input,textarea,select,[contenteditable]'))return;
-  const r=stage.getBoundingClientRect();if(!panelOpen&&cameraState!=='tracking'&&!placing&&!menu.isOpen())return;if(r.bottom<=0||r.top>=win.innerHeight)return;
+  const r=stage.getBoundingClientRect();if(!panelOpen&&cameraState!=='tracking'&&!placing&&!menu.isOpen()&&!fullscreenActive)return;if(r.bottom<=0||r.top>=win.innerHeight)return;
   if(event.key==='Escape'&&(transaction||placing||menu.isOpen())){event.preventDefault();event.stopImmediatePropagation();cancel('已取消未完成的预览。');closeMenu();}
   else if(event.key.toLowerCase()==='v'){event.preventDefault();event.stopImmediatePropagation();toggleMenu();}
   else if(event.key.toLowerCase()==='t'){event.preventDefault();event.stopImmediatePropagation();setMode(selectionMode==='auto'?'manual':'auto');}
@@ -249,8 +274,8 @@ export function mountWorldGestures(stage,host) {
  const onFocus=()=>{focused=true;resetTrackers();};
  const onVisibility=()=>{if(doc.hidden&&['loading','tracking'].includes(cameraState))stop('离开页面，摄像头已关闭。');};
  const onPageHide=()=>stop();const onResize=()=>{if(transaction||placing)cancel('画布尺寸已改变，未完成预览已取消。');targetsAt=-Infinity;update();};
- launch.addEventListener('click',()=>panel(!panelOpen));$('collapse').addEventListener('click',()=>panel(false));$('start').addEventListener('click',start);$('stop').addEventListener('click',()=>stop());$('compact-stop').addEventListener('click',()=>stop());$('mode').addEventListener('click',()=>setMode(selectionMode==='auto'?'manual':'auto'));$('compact-mode').addEventListener('click',()=>setMode(selectionMode==='auto'?'manual':'auto'));$('menu-open').addEventListener('click',toggleMenu);
+ launch.addEventListener('click',()=>panel(!panelOpen));$('collapse').addEventListener('click',()=>panel(false));$('tools-toggle').addEventListener('click',()=>panel(!panelOpen));$('fullscreen-tools').addEventListener('click',()=>panel(!panelOpen));$('start').addEventListener('click',start);$('stop').addEventListener('click',()=>stop());$('compact-stop').addEventListener('click',()=>stop());$('mode').addEventListener('click',()=>setMode(selectionMode==='auto'?'manual':'auto'));$('compact-mode').addEventListener('click',()=>setMode(selectionMode==='auto'?'manual':'auto'));$('menu-open').addEventListener('click',toggleMenu);
  doc.addEventListener('keydown',onKey,true);doc.addEventListener('pointerdown',onPointerDown,true);win.addEventListener('pointerup',onPointerUp,true);win.addEventListener('pointercancel',onPointerUp,true);win.addEventListener('lostpointercapture',onPointerUp,true);win.addEventListener('blur',onBlur);win.addEventListener('focus',onFocus);win.addEventListener('pagehide',onPageHide);win.addEventListener('resize',onResize);doc.addEventListener('visibilitychange',onVisibility);
  cameraUI('off');update();
- return Object.freeze({update,cancel,stop,get busy(){return !!transaction||placing||pending;},select(id){selectTarget(id);},destroy(){if(destroyed)return;stop();destroyed=true;doc.removeEventListener('keydown',onKey,true);doc.removeEventListener('pointerdown',onPointerDown,true);win.removeEventListener('pointerup',onPointerUp,true);win.removeEventListener('pointercancel',onPointerUp,true);win.removeEventListener('lostpointercapture',onPointerUp,true);win.removeEventListener('blur',onBlur);win.removeEventListener('focus',onFocus);win.removeEventListener('pagehide',onPageHide);win.removeEventListener('resize',onResize);doc.removeEventListener('visibilitychange',onVisibility);root.remove();launch.remove();}});
+ return Object.freeze({update,cancel,stop,get busy(){return !!transaction||placing||pending;},select(id){selectTarget(id);},destroy(){if(destroyed)return;stop();destroyed=true;doc.removeEventListener('keydown',onKey,true);doc.removeEventListener('pointerdown',onPointerDown,true);win.removeEventListener('pointerup',onPointerUp,true);win.removeEventListener('pointercancel',onPointerUp,true);win.removeEventListener('lostpointercapture',onPointerUp,true);win.removeEventListener('blur',onBlur);win.removeEventListener('focus',onFocus);win.removeEventListener('pagehide',onPageHide);win.removeEventListener('resize',onResize);doc.removeEventListener('visibilitychange',onVisibility);stage.classList.remove('gesture-clean');root.remove();launch.remove();}});
 }

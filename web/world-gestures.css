@@ -27,3 +27,22 @@ body.focus-mode .world-gesture-legend,#live-stage:fullscreen .world-gesture-lege
  body:not(.controller):not(.focus-mode) .world-gesture-menu .gesture-menu-footer{margin-top:6px}
  body:not(.controller):not(.focus-mode) .world-gesture-menu .gesture-menu-footer .gesture-menu-item{min-height:27px;padding:4px;font-size:9px}
 }
+
+/* Keep the live preview at the viewport corner and unfold controls on demand. */
+.world-gesture-camera{position:fixed;top:auto!important;right:max(16px,env(safe-area-inset-right));bottom:max(16px,env(safe-area-inset-bottom));width:160px;max-width:calc(100% - 24px);pointer-events:auto;z-index:8}
+.world-gesture-camera-controls{position:absolute;left:0;right:0;top:0;display:flex;align-items:center;justify-content:space-between;gap:5px;padding:4px 5px;background:linear-gradient(#143d50b8,transparent);z-index:2}
+.world-gesture-root .world-gesture-camera-controls button{min-height:25px;padding:3px 6px;border:0;border-radius:7px;background:#173e4ea8;color:#f3f9ec;font-size:9px;line-height:1.4;white-space:nowrap}
+.world-gesture-root .world-gesture-camera-controls button:hover{background:#173e4ee6}
+.world-gesture-root .world-gesture-camera-controls button:last-child{min-width:24px;font-size:15px;line-height:1;padding:3px}
+.world-gesture-root[data-camera-state=tracking] .world-gesture-panel{position:fixed;right:max(16px,env(safe-area-inset-right));bottom:max(148px,calc(env(safe-area-inset-bottom) + 148px));max-height:calc(100dvh - 178px)}
+#workbench #live-stage.gesture-clean .canvas-tools,#workbench #live-stage.gesture-clean .object-tools,#workbench #live-stage.gesture-clean>#inspector:not([hidden]),#workbench #live-stage.gesture-clean .canvas-label{display:none!important}
+@media(max-width:600px){
+ .world-gesture-camera{right:max(12px,env(safe-area-inset-right));bottom:max(12px,env(safe-area-inset-bottom));width:124px}
+ .world-gesture-root[data-camera-state=tracking] .world-gesture-panel{right:max(12px,env(safe-area-inset-right));bottom:max(117px,calc(env(safe-area-inset-bottom) + 117px));max-height:calc(100dvh - 145px)}
+ .world-gesture-root .world-gesture-camera-controls button{font-size:8px;min-height:23px;padding:3px 5px}
+}
+@media(max-height:500px){.world-gesture-camera{width:116px}.world-gesture-root[data-camera-state=tracking] .world-gesture-panel{bottom:max(115px,calc(env(safe-area-inset-bottom) + 115px));max-height:calc(100dvh - 135px)}}
+
+.world-gesture-root .world-fullscreen-tools{position:fixed;left:max(16px,env(safe-area-inset-left));top:max(22px,env(safe-area-inset-top));min-height:32px;padding:7px 12px;border:1px solid #ffffff8c;border-radius:11px;background:#f6faefdd;backdrop-filter:blur(14px);box-shadow:0 4px 24px #173b4c18;color:#31595b;font-size:11px;pointer-events:auto;z-index:9}
+body.focus-mode #live-stage:not(.gesture-clean) .canvas-tools,#live-stage:fullscreen:not(.gesture-clean) .canvas-tools{opacity:1!important;pointer-events:auto!important;top:max(66px,calc(env(safe-area-inset-top) + 52px))}
+@media(max-width:600px){.world-gesture-root .world-fullscreen-tools{left:max(12px,env(safe-area-inset-left));top:max(16px,env(safe-area-inset-top))}}
